@@ -11,8 +11,8 @@ PROCEDURE_TYPES = [
     'Видалення стрілки'
 ]
 
-# Дні тижня українською
-DAYS_OF_WEEK = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+# Дні тижня українською (понеділок = 0, неділя = 6, відповідно до weekday())
+DAYS_OF_WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд']
 
 # Стани для ConversationHandler
 (CREATE_EVENT_DATE, CREATE_EVENT_TIME, CREATE_EVENT_PROCEDURE,
@@ -44,7 +44,7 @@ def generate_date_options():
         month = date.month
 
         if i == 0:
-            display = f"Сьогодні ({day_num}.{month:02d})"
+            display = "Сьогодні"
         else:
             display = f"{day_name}, {day_num}.{month:02d}"
 
