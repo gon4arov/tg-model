@@ -227,6 +227,20 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
+    def get_applications_by_event(self, event_id: int) -> List[Dict]:
+        """Отримати всі заявки на захід (незалежно від статусу)"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM applications
+            WHERE event_id = ?
+            ORDER BY created_at
+        ''', (event_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
     def update_application_group_message_id(self, application_id: int, message_id: int) -> None:
         """Оновити ID повідомлення заявки в групі"""
         conn = self.get_connection()

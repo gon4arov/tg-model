@@ -219,11 +219,32 @@ async def admin_manage_events_button(update: Update, context: ContextTypes.DEFAU
         return
 
     message = "Активні заходи:\n\n"
-    for event in events:
-        message += f"ID {event['id']} | {event['procedure_type']}\n"
-        message += f"Дата: {format_date(event['date'])} {event['time']}\n\n"
+    keyboard = []
 
-    keyboard = [[InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")]]
+    for event in events:
+        # Скорочена назва процедури для кнопок
+        procedure_short = event['procedure_type'][:20] + '...' if len(event['procedure_type']) > 20 else event['procedure_type']
+        date_short = format_date(event['date']).split(',')[0] if ',' in format_date(event['date']) else format_date(event['date'])
+
+        message += f"🔹 {event['procedure_type']}\n"
+        message += f"📅 {format_date(event['date'])} о {event['time']}\n"
+        message += f"ID: {event['id']}\n\n"
+
+        # Кнопки для кожного заходу з інформацією про захід
+        keyboard.append([
+            InlineKeyboardButton(
+                f"👥 {procedure_short} {date_short}",
+                callback_data=f"view_apps_{event['id']}"
+            )
+        ])
+        keyboard.append([
+            InlineKeyboardButton(
+                f"❌ Скасувати: {procedure_short} {date_short}",
+                callback_data=f"cancel_event_{event['id']}"
+            )
+        ])
+
+    keyboard.append([InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")])
     await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
@@ -275,6 +296,88 @@ async def cancel_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_admin_menu(update, context, edit_message=True)
 
     return ConversationHandler.END
+
+
+async def cancel_event_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Підтвердження скасування заходу"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    event_id = int(query.data.split('_')[2])
+    event = db.get_event(event_id)
+
+    if not event:
+        await query.edit_message_text("Захід не знайдено")
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Так, скасувати", callback_data=f"confirm_cancel_event_{event_id}"),
+            InlineKeyboardButton("❌ Ні, залишити", callback_data="admin_manage_events")
+        ]
+    ]
+
+    await query.edit_message_text(
+        f"Ви впевнені, що хочете скасувати захід?\n\n"
+        f"Процедура: {event['procedure_type']}\n"
+        f"Дата: {format_date(event['date'])} о {event['time']}\n\n"
+        f"Всі заявки на цей захід будуть також скасовані.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def confirm_cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Скасування заходу після підтвердження"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    event_id = int(query.data.split('_')[3])
+    event = db.get_event(event_id)
+
+    if not event:
+        await query.edit_message_text("Захід не знайдено")
+        return
+
+    # Оновити статус заходу на 'cancelled'
+    db.update_event_status(event_id, 'cancelled')
+
+    # Відправити повідомлення всім кандидатам про скасування
+    applications = db.get_applications_by_event(event_id)
+    for app in applications:
+        try:
+            await context.bot.send_message(
+                chat_id=app['user_id'],
+                text=f"Захід '{event['procedure_type']}' {format_date(event['date'])} о {event['time']} скасовано.\n\n"
+                     f"Вибачте за незручності."
+            )
+        except Exception as e:
+            logger.error(f"Не вдалося надіслати повідомлення користувачу {app['user_id']}: {e}")
+
+    # Видалити повідомлення з каналу, якщо є message_id
+    if event.get('message_id'):
+        try:
+            await context.bot.delete_message(
+                chat_id=CHANNEL_ID,
+                message_id=event['message_id']
+            )
+        except Exception as e:
+            logger.error(f"Не вдалося видалити повідомлення з каналу: {e}")
+
+    await query.edit_message_text(
+        f"Захід '{event['procedure_type']}' {format_date(event['date'])} о {event['time']} успішно скасовано.\n\n"
+        f"Всім кандидатам надіслано повідомлення про скасування."
+    )
+
+    # Показати головне меню
+    await show_admin_menu(update, context, edit_message=False)
 
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1279,6 +1382,8 @@ def main():
     # Обробники кнопок адміністратора
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(admin_manage_events_button, pattern='^admin_manage_events$'))
+    application.add_handler(CallbackQueryHandler(cancel_event_confirm, pattern='^cancel_event_'))
+    application.add_handler(CallbackQueryHandler(confirm_cancel_event, pattern='^confirm_cancel_event_'))
 
     # Обробники callback для управління заявками
     application.add_handler(CallbackQueryHandler(approve_application, pattern='^approve_'))
