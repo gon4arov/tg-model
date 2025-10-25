@@ -56,6 +56,7 @@ db = Database()
 ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
 CHANNEL_ID = os.getenv('CHANNEL_ID', '')
 GROUP_ID = os.getenv('GROUP_ID', '')
+CHANNEL_LINK = os.getenv('CHANNEL_LINK', '')
 
 
 def is_admin(user_id: int) -> bool:
@@ -116,19 +117,32 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, ed
         [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")]
     ]
 
-    text = "Вітаю, адміністраторе!\n\nОберіть дію:"
-
     if edit_message and update.callback_query:
+        # Редагуємо поточне повідомлення
         await update.callback_query.edit_message_text(
-            text,
+            "Оберіть дію:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
+        # Видалити попереднє меню, якщо воно є
+        if 'last_admin_menu_id' in context.user_data:
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id,
+                    message_id=context.user_data['last_admin_menu_id']
+                )
+            except:
+                pass  # Ігноруємо помилки, якщо повідомлення вже видалено
+
+        # Відправляємо нове повідомлення
         message = update.callback_query.message if update.callback_query else update.message
-        await message.reply_text(
-            text,
+        sent_message = await message.reply_text(
+            "Оберіть дію:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+        # Зберегти ID нового меню
+        context.user_data['last_admin_menu_id'] = sent_message.message_id
 
 
 async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
@@ -207,15 +221,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_create_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка кнопки 'Створити захід'"""
     query = update.callback_query
-    await query.answer()
 
     if not is_admin(query.from_user.id):
+        await query.answer()
         await query.message.reply_text("Немає доступу")
         return ConversationHandler.END
+
+    await query.answer()
+
+    # Видалити останнє повідомлення незакінченого створення заходу, якщо воно є
+    if 'last_event_form_message' in context.user_data:
+        try:
+            await context.bot.delete_message(
+                chat_id=query.message.chat_id,
+                message_id=context.user_data['last_event_form_message']
+            )
+        except:
+            pass  # Ігноруємо помилки, якщо повідомлення вже видалено
+
+    # Видалити кнопки з поточного меню одразу (замінити на текст без кнопок)
+    try:
+        await query.edit_message_text("Створення нового заходу...")
+    except:
+        pass
+
+    # Зберегти ID попереднього меню перед очищенням
+    prev_menu_id = context.user_data.get('last_admin_menu_id')
 
     # Викликаємо логіку створення заходу
     context.user_data.clear()
     context.user_data['event'] = {}
+    context.user_data['menu_to_delete'] = prev_menu_id  # Зберегти ID меню для видалення після завершення
 
     date_options = generate_date_options()
     # Групуємо дати по 4 в рядок (4 стовпчики)
@@ -224,10 +260,11 @@ async def admin_create_event_button(update: Update, context: ContextTypes.DEFAUL
     keyboard = list(chunk_list(date_buttons, 4))
     keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
 
-    await query.edit_message_text(
+    sent_msg = await query.message.reply_text(
         "Оберіть дату заходу:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    context.user_data['last_event_form_message'] = sent_msg.message_id
 
     return CREATE_EVENT_DATE
 
@@ -488,11 +525,12 @@ async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="user_back_to_menu")]]
 
+    channel_text = f" {CHANNEL_LINK}" if CHANNEL_LINK else ""
     text = (
         "ℹ️ Інформація про бота\n\n"
         "Цей бот допоможе вам записатися на безкоштовні косметологічні процедури.\n\n"
         "Як це працює:\n"
-        "1️⃣ Підпишіться на наш канал\n"
+        f"1️⃣ Підпишіться на наш канал{channel_text}\n"
         "2️⃣ Натисніть кнопку 'Подати заявку' під оголошенням про захід\n"
         "3️⃣ Заповніть форму заявки\n"
         "4️⃣ Очікуйте на схвалення адміністратора\n\n"
@@ -849,21 +887,34 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Опублікувати в канал
         await publish_event_to_channel(context, event_id)
 
-        await query.message.reply_text(
+        # Видалити старе меню, якщо воно збережене
+        if 'menu_to_delete' in context.user_data:
+            try:
+                await context.bot.delete_message(
+                    chat_id=query.message.chat_id,
+                    message_id=context.user_data['menu_to_delete']
+                )
+            except:
+                pass  # Ігноруємо помилки, якщо повідомлення вже видалено
+
+        success_msg = await query.message.reply_text(
             f"✅ Захід \"{event['procedure']} {event['date']} на {event['time']}\" успішно опубліковано в каналі!"
         )
 
-        # Показати головне меню
+        # Очистити дані
         context.user_data.clear()
-        await show_admin_menu(update, context, edit_message=False)
+
+        # Показати нове меню
+        from telegram import Update as TelegramUpdate
+        new_update = TelegramUpdate(update.update_id, message=success_msg)
+        await show_admin_menu(new_update, context)
 
     except Exception as e:
         logger.error(f"Помилка створення заходу: {e}")
         await query.message.reply_text("Помилка при створенні заходу")
 
-        # Показати головне меню навіть при помилці
+        # Очистити дані
         context.user_data.clear()
-        await show_admin_menu(update, context, edit_message=False)
 
     return ConversationHandler.END
 
@@ -1444,7 +1495,7 @@ async def forward_candidate_message(update: Update, context: ContextTypes.DEFAUL
 
     # Ігнорувати якщо це приватний чат (conversation активний)
     # Тільки обробляємо повідомлення які НЕ в контексті conversation
-    if context.user_data.get('message_user_id'):
+    if 'application' in context.user_data or 'event' in context.user_data:
         return
 
     # Перевірка що користувач є в базі (подавав заявку)

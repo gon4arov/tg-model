@@ -27,7 +27,7 @@ pip install -r requirements.txt
 ### Налаштування середовища
 
 1. Скопіювати `.env.example` в `.env`
-2. Заповнити BOT_TOKEN, ADMIN_ID, CHANNEL_ID, GROUP_ID
+2. Заповнити BOT_TOKEN, ADMIN_ID, CHANNEL_ID, CHANNEL_LINK, GROUP_ID
 3. ID каналу та групи мають починатися з мінуса!
 
 ## Архітектура
@@ -152,4 +152,4 @@ SQLite з таблицями:
 
 Редагувати список `PROCEDURE_TYPES` в `constants.py`
 
-- ніколи не запускай бота, я роблю це вручну
+- ніколи не запускай та перезапускай бота, я роблю це вручну

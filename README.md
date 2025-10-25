@@ -82,6 +82,9 @@ ADMIN_ID=123456789
 # ID каналу для публікації заходів (з мінусом!)
 CHANNEL_ID=-1001234567890
 
+# Посилання на канал (наприклад: https://t.me/your_channel)
+CHANNEL_LINK=https://t.me/your_channel
+
 # ID групи для заявок (з мінусом!)
 GROUP_ID=-1009876543210
 ```
