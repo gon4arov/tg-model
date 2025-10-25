@@ -1,6 +1,8 @@
 import os
 import re
 import logging
+import signal
+import sys
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -12,8 +14,11 @@ from telegram.ext import (
     MessageHandler,
     ConversationHandler,
     ContextTypes,
-    filters
+    filters,
+    PicklePersistence
 )
+from telegram.request import HTTPXRequest
+from telegram.error import Forbidden, BadRequest, TimedOut, NetworkError
 
 from database import Database
 from constants import (
@@ -69,6 +74,37 @@ def chunk_list(lst, n):
         yield lst[i:i + n]
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Глобальний обробник помилок"""
+    logger.error(f"Exception while handling an update:", exc_info=context.error)
+
+    # Обробка специфічних помилок
+    if isinstance(context.error, Forbidden):
+        # Користувач заблокував бота
+        if update and hasattr(update, 'effective_user') and update.effective_user:
+            user_id = update.effective_user.id
+            db.block_user(user_id)
+            logger.info(f"User {user_id} blocked the bot - marked as blocked in DB")
+
+    elif isinstance(context.error, BadRequest):
+        logger.warning(f"Bad request: {context.error}")
+
+    elif isinstance(context.error, TimedOut):
+        logger.warning(f"Request timed out: {context.error}")
+
+    elif isinstance(context.error, NetworkError):
+        logger.warning(f"Network error: {context.error}")
+
+    # Повідомлення користувачу при можливості
+    try:
+        if update and hasattr(update, 'effective_message') and update.effective_message:
+            await update.effective_message.reply_text(
+                "Вибачте, сталася помилка. Спробуйте ще раз або зверніться до адміністратора."
+            )
+    except Exception as e:
+        logger.error(f"Could not send error message to user: {e}")
+
+
 # ==================== КОМАНДИ ====================
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
@@ -99,11 +135,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db.create_user(user_id)
 
+    # Перевірка чи користувач заблокований
+    user = db.get_user(user_id)
+    if user and user.get('is_blocked'):
+        await update.message.reply_text("Вибачте, ваш доступ до бота заблоковано.")
+        return ConversationHandler.END
+
     # Перевірка deep link для подачі заявки
     if context.args and context.args[0].startswith('event_'):
-        event_id = int(context.args[0].split('_')[1])
-        context.user_data['apply_event_id'] = event_id
-        return await apply_event_start(update, context)
+        try:
+            event_id = int(context.args[0].split('_')[1])
+            # Перевірити чи існує захід
+            event = db.get_event(event_id)
+            if not event:
+                await update.message.reply_text("Захід не знайдено або вже завершено.")
+                return
+            if event['status'] != 'published':
+                await update.message.reply_text("Цей захід більше не приймає заявки.")
+                return
+            context.user_data['apply_event_id'] = event_id
+            return await apply_event_start(update, context)
+        except (ValueError, IndexError):
+            await update.message.reply_text("Невірне посилання на захід.")
+            return
 
     if is_admin(user_id):
         await show_admin_menu(update, context)
@@ -766,6 +820,10 @@ async def apply_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def apply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка фото від моделі"""
+    if 'application' not in context.user_data:
+        await update.message.reply_text("Сесія застаріла. Будь ласка, почніть заново з посилання в каналі.")
+        return ConversationHandler.END
+
     photos = context.user_data['application'].get('photos', [])
 
     if len(photos) >= 3:
@@ -958,6 +1016,9 @@ async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE
             chat_id=app['user_id'],
             text="Вашу заявку схвалено!\n\nОчікуйте на додаткову інформацію."
         )
+    except Forbidden:
+        db.block_user(app['user_id'])
+        logger.info(f"User {app['user_id']} blocked the bot - marked as blocked in DB")
     except Exception as e:
         logger.error(f"Не вдалося надіслати повідомлення користувачу: {e}")
 
@@ -1102,7 +1163,25 @@ def main():
         logger.error("BOT_TOKEN не знайдено в .env файлі!")
         return
 
-    application = Application.builder().token(token).build()
+    # Налаштування HTTP запитів з таймаутами
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=10.0,
+        read_timeout=10.0,
+        write_timeout=10.0
+    )
+
+    # Налаштування persistence для збереження стану
+    persistence = PicklePersistence(filepath="bot_data.pickle")
+
+    # Створення додатку з усіма налаштуваннями
+    application = (
+        Application.builder()
+        .token(token)
+        .request(request)
+        .persistence(persistence)
+        .build()
+    )
 
     # Обробник створення заходу
     create_event_handler = ConversationHandler(
@@ -1144,7 +1223,9 @@ def main():
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ]
         },
-        fallbacks=[CallbackQueryHandler(cancel, pattern='^cancel$')]
+        fallbacks=[CallbackQueryHandler(cancel, pattern='^cancel$')],
+        name="create_event_conversation",
+        persistent=True
     )
 
     # Обробник подачі заявки
@@ -1171,7 +1252,9 @@ def main():
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ]
         },
-        fallbacks=[CallbackQueryHandler(cancel, pattern='^cancel$')]
+        fallbacks=[CallbackQueryHandler(cancel, pattern='^cancel$')],
+        name="apply_event_conversation",
+        persistent=True
     )
 
     # Обробник блокування користувача
@@ -1183,7 +1266,9 @@ def main():
                 CallbackQueryHandler(cancel_block, pattern='^cancel_block$')
             ]
         },
-        fallbacks=[CallbackQueryHandler(cancel_block, pattern='^cancel_block$')]
+        fallbacks=[CallbackQueryHandler(cancel_block, pattern='^cancel_block$')],
+        name="block_user_conversation",
+        persistent=True
     )
 
     # Додати обробники (ConversationHandlers мають вищий пріоритет - group 0)
@@ -1204,9 +1289,29 @@ def main():
     # Обробник повідомлень від кандидатів (пересилання в групу) - нижчий пріоритет
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_candidate_message), group=1)
 
+    # Глобальний обробник помилок
+    application.add_error_handler(error_handler)
+
+    # Налаштування graceful shutdown
+    def signal_handler(sig, frame):
+        logger.info("Отримано сигнал зупинки. Зупиняю бота...")
+        application.stop_running()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # Запуск бота
     logger.info("Бот запущено!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True  # Ігнорувати старі updates після перезапуску
+        )
+    except KeyboardInterrupt:
+        logger.info("Бот зупинено користувачем")
+    finally:
+        logger.info("Завершення роботи бота")
 
 
 if __name__ == '__main__':
