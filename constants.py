@@ -19,7 +19,10 @@ DAYS_OF_WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд']
  CREATE_EVENT_PHOTO_NEEDED, CREATE_EVENT_COMMENT,
  CREATE_EVENT_CONFIRM) = range(6)
 
-(APPLY_FULL_NAME, APPLY_PHONE, APPLY_PHOTOS, APPLY_CONSENT, APPLY_CONFIRM) = range(100, 105)
+(APPLY_FULL_NAME, APPLY_PHONE, APPLY_PHOTOS, APPLY_CONFIRM) = range(100, 104)
+
+MESSAGE_TO_CANDIDATE = 200
+BLOCK_USER_ID = 201
 
 def generate_time_slots():
     """Генерація часових слотів від 9:00 до 17:00 з інтервалом 10 хвилин"""

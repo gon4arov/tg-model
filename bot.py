@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
@@ -28,8 +29,8 @@ from constants import (
     APPLY_FULL_NAME,
     APPLY_PHONE,
     APPLY_PHOTOS,
-    APPLY_CONSENT,
-    APPLY_CONFIRM
+    APPLY_CONFIRM,
+    BLOCK_USER_ID
 )
 
 # Завантаження змінних середовища
@@ -70,6 +71,29 @@ def chunk_list(lst, n):
 
 # ==================== КОМАНДИ ====================
 
+async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
+    """Відображення головного меню адміністратора"""
+    keyboard = [
+        [InlineKeyboardButton("Створити новий захід", callback_data="admin_create_event")],
+        [InlineKeyboardButton("Переглянути заходи", callback_data="admin_manage_events")],
+        [InlineKeyboardButton("Заблокувати користувача", callback_data="admin_block_user")]
+    ]
+
+    text = "Вітаю, адміністраторе!\n\nОберіть дію:"
+
+    if edit_message and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        message = update.callback_query.message if update.callback_query else update.message
+        await message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка команди /start"""
     user_id = update.effective_user.id
@@ -82,62 +106,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await apply_event_start(update, context)
 
     if is_admin(user_id):
-        keyboard = [
-            [InlineKeyboardButton("Створити новий захід", callback_data="admin_create_event")],
-            [InlineKeyboardButton("Переглянути заходи", callback_data="admin_manage_events")]
-        ]
-        await update.message.reply_text(
-            "Вітаю, адміністраторе!\n\n"
-            "Оберіть дію:\n\n"
-            "Для блокування користувача використовуйте команду:\n"
-            "/block_user <user_id>\n\n"
-            "Керування заявками доступне в групі.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await show_admin_menu(update, context)
     else:
         await update.message.reply_text(
             "Вітаємо!\n\n"
             "Цей бот допоможе вам записатися на косметологічні процедури.\n\n"
             "Щоб подати заявку на участь, натисніть на повідомлення про захід в нашому каналі."
         )
-
-
-async def manage_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Перегляд активних заходів"""
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Немає доступу")
-        return
-
-    events = db.get_active_events()
-
-    if not events:
-        await update.message.reply_text("Немає активних заходів")
-        return
-
-    message = "Активні заходи:\n\n"
-    for event in events:
-        message += f"ID {event['id']} | {event['procedure_type']}\n"
-        message += f"Дата: {format_date(event['date'])} {event['time']}\n\n"
-
-    await update.message.reply_text(message)
-
-
-async def block_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Блокування користувача"""
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Немає доступу")
-        return
-
-    if not context.args:
-        await update.message.reply_text("Використання: /block_user <user_id>")
-        return
-
-    try:
-        user_id_to_block = int(context.args[0])
-        db.block_user(user_id_to_block)
-        await update.message.reply_text(f"Користувача {user_id_to_block} заблоковано")
-    except ValueError:
-        await update.message.reply_text("Невірний ID користувача")
 
 
 async def admin_create_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,7 +135,7 @@ async def admin_create_event_button(update: Update, context: ContextTypes.DEFAUL
     date_buttons = [InlineKeyboardButton(opt['display'], callback_data=f"date_{opt['date']}")
                     for opt in date_options]
     keyboard = list(chunk_list(date_buttons, 4))
-    keyboard.append([InlineKeyboardButton("Скасувати", callback_data="cancel")])
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
 
     await query.message.reply_text(
         "Оберіть дату заходу:",
@@ -179,12 +154,14 @@ async def admin_manage_events_button(update: Update, context: ContextTypes.DEFAU
         await query.message.reply_text("Немає доступу")
         return
 
-    await query.edit_message_text("Завантажую заходи...")
-
     events = db.get_active_events()
 
     if not events:
-        await query.message.reply_text("Немає активних заходів")
+        keyboard = [[InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")]]
+        await query.edit_message_text(
+            "Немає активних заходів",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
     message = "Активні заходи:\n\n"
@@ -192,7 +169,66 @@ async def admin_manage_events_button(update: Update, context: ContextTypes.DEFAU
         message += f"ID {event['id']} | {event['procedure_type']}\n"
         message += f"Дата: {format_date(event['date'])} {event['time']}\n\n"
 
-    await query.message.reply_text(message)
+    keyboard = [[InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")]]
+    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def admin_block_user_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка кнопки 'Заблокувати користувача'"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return ConversationHandler.END
+
+    keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_block")]]
+    await query.edit_message_text(
+        "Введіть ID користувача, якого потрібно заблокувати:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return BLOCK_USER_ID
+
+
+async def block_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка введення ID користувача для блокування"""
+    try:
+        user_id_to_block = int(update.message.text)
+        db.block_user(user_id_to_block)
+
+        keyboard = [[InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")]]
+        await update.message.reply_text(
+            f"✅ Користувача {user_id_to_block} заблоковано",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except ValueError:
+        keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_block")]]
+        await update.message.reply_text(
+            "❌ Невірний ID користувача. Спробуйте ще раз:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return BLOCK_USER_ID
+
+    return ConversationHandler.END
+
+
+async def cancel_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Скасування блокування користувача"""
+    query = update.callback_query
+    await query.answer()
+
+    await show_admin_menu(update, context, edit_message=True)
+
+    return ConversationHandler.END
+
+
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Повернення до головного меню"""
+    query = update.callback_query
+    await query.answer()
+
+    await show_admin_menu(update, context, edit_message=True)
 
 
 # ==================== СТВОРЕННЯ ЗАХОДУ (АДМІН) ====================
@@ -211,7 +247,7 @@ async def create_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     date_buttons = [InlineKeyboardButton(opt['display'], callback_data=f"date_{opt['date']}")
                     for opt in date_options]
     keyboard = list(chunk_list(date_buttons, 4))
-    keyboard.append([InlineKeyboardButton("Скасувати", callback_data="cancel")])
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
 
     await update.message.reply_text(
         "Оберіть дату заходу:",
@@ -221,10 +257,32 @@ async def create_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return CREATE_EVENT_DATE
 
 
+async def show_date_selection(query, context: ContextTypes.DEFAULT_TYPE):
+    """Показати вибір дати"""
+    date_options = generate_date_options()
+    # Групуємо дати по 4 в рядок (4 стовпчики)
+    date_buttons = [InlineKeyboardButton(opt['display'], callback_data=f"date_{opt['date']}")
+                    for opt in date_options]
+    keyboard = list(chunk_list(date_buttons, 4))
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
+
+    if query:
+        await query.edit_message_text(
+            "Оберіть дату заходу:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    return CREATE_EVENT_DATE
+
+
 async def create_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка вибору дати"""
     query = update.callback_query
     await query.answer()
+
+    # Якщо це повернення назад, просто показуємо вибір дати
+    if query.data == "back_to_date":
+        return await show_date_selection(query, context)
 
     date = query.data.split('_', 1)[1]
     context.user_data['event']['date'] = date
@@ -236,10 +294,27 @@ async def create_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(time, callback_data=f"time_{time}") for time in TIME_SLOTS],
         5
     ))
-    keyboard.append([InlineKeyboardButton("Назад", callback_data="back_to_date")])
-    keyboard.append([InlineKeyboardButton("Скасувати", callback_data="cancel")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_date")])
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
 
     await query.message.reply_text(
+        "Оберіть час заходу:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return CREATE_EVENT_TIME
+
+
+async def show_time_selection(query, context: ContextTypes.DEFAULT_TYPE):
+    """Показати вибір часу"""
+    keyboard = list(chunk_list(
+        [InlineKeyboardButton(time, callback_data=f"time_{time}") for time in TIME_SLOTS],
+        5
+    ))
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_date")])
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
+
+    await query.edit_message_text(
         "Оберіть час заходу:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -252,6 +327,10 @@ async def create_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Якщо це повернення назад з екрану процедур, просто показуємо вибір часу
+    if query.data == "back_to_time":
+        return await show_time_selection(query, context)
+
     time = query.data.split('_', 1)[1]
     context.user_data['event']['time'] = time
 
@@ -260,10 +339,25 @@ async def create_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Показати типи процедур
     keyboard = [[InlineKeyboardButton(ptype, callback_data=f"proc_{i}")]
                 for i, ptype in enumerate(PROCEDURE_TYPES)]
-    keyboard.append([InlineKeyboardButton("Назад", callback_data="back_to_time")])
-    keyboard.append([InlineKeyboardButton("Скасувати", callback_data="cancel")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_time")])
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
 
     await query.message.reply_text(
+        "Оберіть тип процедури:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return CREATE_EVENT_PROCEDURE
+
+
+async def show_procedure_selection(query, context: ContextTypes.DEFAULT_TYPE):
+    """Показати вибір процедури"""
+    keyboard = [[InlineKeyboardButton(ptype, callback_data=f"proc_{i}")]
+                for i, ptype in enumerate(PROCEDURE_TYPES)]
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_time")])
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
+
+    await query.edit_message_text(
         "Оберіть тип процедури:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -276,6 +370,10 @@ async def create_event_procedure(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
 
+    # Якщо це повернення назад, просто показуємо вибір процедури
+    if query.data == "back_to_procedure":
+        return await show_procedure_selection(query, context)
+
     proc_index = int(query.data.split('_')[1])
     context.user_data['event']['procedure'] = PROCEDURE_TYPES[proc_index]
 
@@ -283,14 +381,33 @@ async def create_event_procedure(update: Update, context: ContextTypes.DEFAULT_T
 
     keyboard = [
         [
-            InlineKeyboardButton("Так", callback_data="photo_yes"),
-            InlineKeyboardButton("Ні", callback_data="photo_no")
+            InlineKeyboardButton("✅ Так", callback_data="photo_yes"),
+            InlineKeyboardButton("❌ Ні", callback_data="photo_no")
         ],
-        [InlineKeyboardButton("Назад", callback_data="back_to_procedure")],
-        [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_procedure")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
     ]
 
     await query.message.reply_text(
+        "Чи потрібно кандидатам надавати фото зони?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return CREATE_EVENT_PHOTO_NEEDED
+
+
+async def show_photo_needed_selection(query, context: ContextTypes.DEFAULT_TYPE):
+    """Показати вибір необхідності фото"""
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Так", callback_data="photo_yes"),
+            InlineKeyboardButton("❌ Ні", callback_data="photo_no")
+        ],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_procedure")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
+    ]
+
+    await query.edit_message_text(
         "Чи потрібно кандидатам надавати фото зони?",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -303,6 +420,10 @@ async def create_event_photo_needed(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     await query.answer()
 
+    # Якщо це повернення назад, просто показуємо вибір фото
+    if query.data == "back_to_photo":
+        return await show_photo_needed_selection(query, context)
+
     needs_photo = query.data == "photo_yes"
     context.user_data['event']['needs_photo'] = needs_photo
 
@@ -310,12 +431,32 @@ async def create_event_photo_needed(update: Update, context: ContextTypes.DEFAUL
     await query.edit_message_text(f"Фото {photo_text}")
 
     keyboard = [
-        [InlineKeyboardButton("Пропустити", callback_data="skip_comment")],
-        [InlineKeyboardButton("Назад", callback_data="back_to_photo")],
-        [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+        [InlineKeyboardButton("⏭ Пропустити", callback_data="skip_comment")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_photo")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
     ]
 
     await query.message.reply_text(
+        "Додайте коментар до заходу (необов'язково).\n\n"
+        "Якщо коментар не потрібен, натисніть 'Пропустити'",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return CREATE_EVENT_COMMENT
+
+
+async def show_comment_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показати екран введення коментаря"""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("⏭ Пропустити", callback_data="skip_comment")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_photo")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
+    ]
+
+    await query.edit_message_text(
         "Додайте коментар до заходу (необов'язково).\n\n"
         "Якщо коментар не потрібен, натисніть 'Пропустити'",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -347,8 +488,9 @@ async def show_event_summary(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     keyboard = [
-        [InlineKeyboardButton("Підтвердити і опублікувати", callback_data="confirm_event")],
-        [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+        [InlineKeyboardButton("✅ Підтвердити і опублікувати", callback_data="confirm_event")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_comment")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
     ]
 
     if update.callback_query:
@@ -387,11 +529,21 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Опублікувати в канал
         await publish_event_to_channel(context, event_id)
 
-        await query.message.reply_text("Захід опубліковано в каналі!")
+        await query.message.reply_text(
+            f"Захід \"{event['procedure']} {event['date']} на {event['time']}\" опубліковано в каналі!"
+        )
+
+        # Показати головне меню
+        context.user_data.clear()
+        await show_admin_menu(update, context, edit_message=False)
 
     except Exception as e:
         logger.error(f"Помилка створення заходу: {e}")
         await query.message.reply_text("Помилка при створенні заходу")
+
+        # Показати головне меню навіть при помилці
+        context.user_data.clear()
+        await show_admin_menu(update, context, edit_message=False)
 
     return ConversationHandler.END
 
@@ -435,6 +587,8 @@ async def publish_event_to_channel(context: ContextTypes.DEFAULT_TYPE, event_id:
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Скасування діалогу"""
     query = update.callback_query
+    user_id = update.effective_user.id
+
     if query:
         await query.answer()
         await query.edit_message_text("Скасовано")
@@ -442,6 +596,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Скасовано")
 
     context.user_data.clear()
+
+    # Якщо це адмін, показуємо головне меню
+    if is_admin(user_id):
+        if query:
+            await show_admin_menu(update, context, edit_message=False)
+        else:
+            # Якщо скасування прийшло через текстове повідомлення
+            await update.message.reply_text("Використовуйте /start для повернення в меню")
+
     return ConversationHandler.END
 
 
@@ -475,9 +638,9 @@ async def apply_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user and user['full_name'] and user['phone']:
         keyboard = [
-            [InlineKeyboardButton("Так", callback_data="use_saved_data")],
-            [InlineKeyboardButton("Ввести нові", callback_data="enter_new_data")],
-            [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+            [InlineKeyboardButton("✅ Так", callback_data="use_saved_data")],
+            [InlineKeyboardButton("✏️ Ввести нові", callback_data="enter_new_data")],
+            [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
         ]
 
         await update.message.reply_text(
@@ -510,8 +673,8 @@ async def apply_use_saved_data(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if event['needs_photo']:
         keyboard = [
-            [InlineKeyboardButton("Готово", callback_data="photos_done")],
-            [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+            [InlineKeyboardButton("✅ Готово", callback_data="photos_done")],
+            [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
         ]
         await query.message.reply_text(
             "Надішліть фото зони процедури (до 3 фото).\n\n"
@@ -541,13 +704,37 @@ async def apply_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return APPLY_PHONE
 
 
+def validate_ukrainian_phone(phone: str) -> bool:
+    """Перевірка українського номера телефону"""
+    # Очистити номер від зайвих символів
+    cleaned = re.sub(r'[\s\-\(\)]', '', phone)
+
+    # Патерни для українських номерів
+    patterns = [
+        r'^(\+380|380|0)(39|50|63|66|67|68|73|91|92|93|94|95|96|97|98|99)\d{7}$',
+    ]
+
+    for pattern in patterns:
+        if re.match(pattern, cleaned):
+            return True
+
+    return False
+
+
 async def apply_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка телефону"""
     phone = update.message.text
 
-    # Базова перевірка формату
-    if len(phone.replace('+', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')) < 10:
-        await update.message.reply_text("Невірний формат телефону. Введіть ще раз:")
+    # Перевірка українського номера
+    if not validate_ukrainian_phone(phone):
+        await update.message.reply_text(
+            "Невірний формат телефону.\n\n"
+            "Приклади правильного формату:\n"
+            "+380501234567\n"
+            "0501234567\n"
+            "050 123 45 67\n\n"
+            "Введіть номер українського оператора:"
+        )
         return APPLY_PHONE
 
     context.user_data['application']['phone'] = phone
@@ -564,8 +751,8 @@ async def apply_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if event['needs_photo']:
         keyboard = [
-            [InlineKeyboardButton("Готово", callback_data="photos_done")],
-            [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+            [InlineKeyboardButton("✅ Готово", callback_data="photos_done")],
+            [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
         ]
         await update.message.reply_text(
             "Надішліть фото зони процедури (до 3 фото).\n\n"
@@ -590,8 +777,8 @@ async def apply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['application']['photos'] = photos
 
     keyboard = [
-        [InlineKeyboardButton("Готово", callback_data="photos_done")],
-        [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+        [InlineKeyboardButton("✅ Готово", callback_data="photos_done")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
     ]
 
     await update.message.reply_text(
@@ -616,40 +803,11 @@ async def apply_photos_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return APPLY_PHOTOS
 
     await query.edit_message_text("Фото прийнято")
-    return await show_consent(query.message, context)
-
-
-async def show_consent(message, context: ContextTypes.DEFAULT_TYPE):
-    """Показати згоду"""
-    keyboard = [
-        [InlineKeyboardButton("Підтверджую", callback_data="consent_yes")],
-        [InlineKeyboardButton("Скасувати", callback_data="cancel")]
-    ]
-
-    await message.reply_text(
-        "Підтвердження:\n\n"
-        "Я підтверджую, що:\n"
-        "Мені виповнилося 18 років\n"
-        "Я усвідомлюю характер процедури\n"
-        "Я усвідомлюю можливі наслідки процедури",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    return APPLY_CONSENT
-
-
-async def apply_consent(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка згоди"""
-    query = update.callback_query
-    await query.answer()
-
-    await query.edit_message_text("Згоду надано")
-
     return await show_application_summary(query.message, context)
 
 
 async def show_application_summary(message, context: ContextTypes.DEFAULT_TYPE):
-    """Показати підсумок заявки"""
+    """Показати підсумок заявки зі згодою"""
     app = context.user_data['application']
     event = db.get_event(app['event_id'])
 
@@ -660,13 +818,16 @@ async def show_application_summary(message, context: ContextTypes.DEFAULT_TYPE):
         f"Час: {event['time']}\n\n"
         f"ПІБ: {app['full_name']}\n"
         f"Телефон: {app['phone']}\n"
-        f"Фото додано: {len(app.get('photos', []))}\n"
-        f"Згоду надано: Так"
+        f"Фото додано: {len(app.get('photos', []))}\n\n"
+        f"Підтверджую, що:\n"
+        f"• Мені виповнилося 18 років\n"
+        f"• Я усвідомлюю характер процедури\n"
+        f"• Я усвідомлюю можливі наслідки процедури"
     )
 
     keyboard = [
-        [InlineKeyboardButton("Підтвердити заявку", callback_data="submit_application")],
-        [InlineKeyboardButton("Скасувати", callback_data="cancel")]
+        [InlineKeyboardButton("✅ Підтвердити заявку", callback_data="submit_application")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]
     ]
 
     await message.reply_text(
@@ -730,9 +891,10 @@ async def publish_application_to_group(context: ContextTypes.DEFAULT_TYPE, appli
 
     keyboard = [
         [
-            InlineKeyboardButton("Прийняти", callback_data=f"approve_{application_id}"),
-            InlineKeyboardButton("Відхилити", callback_data=f"reject_{application_id}")
-        ]
+            InlineKeyboardButton("✅ Прийняти", callback_data=f"approve_{application_id}"),
+            InlineKeyboardButton("❌ Відхилити", callback_data=f"reject_{application_id}")
+        ],
+        [InlineKeyboardButton("👤 Профіль кандидата", url=f"tg://user?id={app['user_id']}")]
     ]
 
     if photos:
@@ -782,9 +944,10 @@ async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     keyboard = [
         [
-            InlineKeyboardButton("Обрати основним", callback_data=f"primary_{application_id}"),
+            InlineKeyboardButton("⭐ Обрати основним", callback_data=f"primary_{application_id}"),
             InlineKeyboardButton("Заявки на захід", callback_data=f"view_apps_{app['event_id']}")
-        ]
+        ],
+        [InlineKeyboardButton("👤 Профіль кандидата", url=f"tg://user?id={app['user_id']}")]
     ]
 
     await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
@@ -889,6 +1052,47 @@ async def view_event_applications(update: Update, context: ContextTypes.DEFAULT_
     await query.message.reply_text(message)
 
 
+# ==================== ПОВІДОМЛЕННЯ КАНДИДАТУ ====================
+
+async def forward_candidate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пересилання повідомлень від кандидатів в групу"""
+    user_id = update.effective_user.id
+
+    # Перевірка що це не адмін
+    if is_admin(user_id):
+        return
+
+    # Ігнорувати якщо це приватний чат (conversation активний)
+    # Тільки обробляємо повідомлення які НЕ в контексті conversation
+    if context.user_data.get('message_user_id'):
+        return
+
+    # Перевірка що користувач є в базі (подавав заявку)
+    user = db.get_user(user_id)
+    if not user or not user['full_name']:
+        return
+
+    # Переслати повідомлення в групу
+    try:
+        message_text = (
+            f"💬 Повідомлення від кандидата:\n\n"
+            f"👤 {user['full_name']}\n"
+            f"📱 {user['phone']}\n"
+            f"🆔 User ID: {user_id}\n\n"
+            f"Текст: {update.message.text}"
+        )
+
+        keyboard = [[InlineKeyboardButton("👤 Профіль кандидата", url=f"tg://user?id={user_id}")]]
+
+        await context.bot.send_message(
+            chat_id=GROUP_ID,
+            text=message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logger.error(f"Помилка пересилання повідомлення: {e}")
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -910,16 +1114,17 @@ def main():
         states={
             CREATE_EVENT_DATE: [
                 CallbackQueryHandler(create_event_date, pattern='^date_'),
+                CallbackQueryHandler(create_event_date, pattern='^back_to_date$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
             CREATE_EVENT_TIME: [
                 CallbackQueryHandler(create_event_time, pattern='^time_'),
-                CallbackQueryHandler(create_event_start, pattern='^back_to_date$'),
+                CallbackQueryHandler(create_event_date, pattern='^back_to_date$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
             CREATE_EVENT_PROCEDURE: [
                 CallbackQueryHandler(create_event_procedure, pattern='^proc_'),
-                CallbackQueryHandler(create_event_date, pattern='^back_to_time$'),
+                CallbackQueryHandler(create_event_time, pattern='^back_to_time$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
             CREATE_EVENT_PHOTO_NEEDED: [
@@ -935,6 +1140,7 @@ def main():
             ],
             CREATE_EVENT_CONFIRM: [
                 CallbackQueryHandler(confirm_event, pattern='^confirm_event$'),
+                CallbackQueryHandler(show_comment_input, pattern='^back_to_comment$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ]
         },
@@ -960,10 +1166,6 @@ def main():
                 CallbackQueryHandler(apply_photos_done, pattern='^photos_done$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
-            APPLY_CONSENT: [
-                CallbackQueryHandler(apply_consent, pattern='^consent_yes$'),
-                CallbackQueryHandler(cancel, pattern='^cancel$')
-            ],
             APPLY_CONFIRM: [
                 CallbackQueryHandler(submit_application, pattern='^submit_application$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
@@ -972,13 +1174,25 @@ def main():
         fallbacks=[CallbackQueryHandler(cancel, pattern='^cancel$')]
     )
 
-    # Додати обробники
-    application.add_handler(create_event_handler)
-    application.add_handler(apply_event_handler)
-    application.add_handler(CommandHandler('manage_events', manage_events))
-    application.add_handler(CommandHandler('block_user', block_user_command))
+    # Обробник блокування користувача
+    block_user_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_block_user_button, pattern='^admin_block_user$')],
+        states={
+            BLOCK_USER_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, block_user_id),
+                CallbackQueryHandler(cancel_block, pattern='^cancel_block$')
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(cancel_block, pattern='^cancel_block$')]
+    )
+
+    # Додати обробники (ConversationHandlers мають вищий пріоритет - group 0)
+    application.add_handler(create_event_handler, group=0)
+    application.add_handler(apply_event_handler, group=0)
+    application.add_handler(block_user_handler, group=0)
 
     # Обробники кнопок адміністратора
+    application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(admin_manage_events_button, pattern='^admin_manage_events$'))
 
     # Обробники callback для управління заявками
@@ -986,6 +1200,9 @@ def main():
     application.add_handler(CallbackQueryHandler(reject_application, pattern='^reject_'))
     application.add_handler(CallbackQueryHandler(set_primary_application, pattern='^primary_'))
     application.add_handler(CallbackQueryHandler(view_event_applications, pattern='^view_apps_'))
+
+    # Обробник повідомлень від кандидатів (пересилання в групу) - нижчий пріоритет
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_candidate_message), group=1)
 
     # Запуск бота
     logger.info("Бот запущено!")
