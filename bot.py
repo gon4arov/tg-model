@@ -111,9 +111,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
     """Відображення головного меню адміністратора"""
     keyboard = [
-        [InlineKeyboardButton("Створити новий захід", callback_data="admin_create_event")],
-        [InlineKeyboardButton("Переглянути заходи", callback_data="admin_manage_events")],
-        [InlineKeyboardButton("Заблокувати користувача", callback_data="admin_block_user")]
+        [InlineKeyboardButton("🆕 Створити новий захід", callback_data="admin_create_event")],
+        [InlineKeyboardButton("📋 Переглянути заходи", callback_data="admin_manage_events")],
+        [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")]
     ]
 
     text = "Вітаю, адміністраторе!\n\nОберіть дію:"
@@ -449,11 +449,18 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
             'cancelled': '🚫'
         }.get(app['status'], '❓')
 
+        status_text = {
+            'pending': 'Очікує розгляду',
+            'approved': 'Схвалено',
+            'rejected': 'Відхилено',
+            'cancelled': 'Скасовано'
+        }.get(app['status'], 'Невідомо')
+
         event_status = " (Захід скасовано)" if app['event_status'] == 'cancelled' else ""
 
         message += f"{status_emoji} {app['procedure_type']}\n"
         message += f"📅 {format_date(app['date'])} о {app['time']}\n"
-        message += f"Статус: {app['status']}{event_status}\n"
+        message += f"Статус: {status_text}{event_status}\n"
 
         # Якщо заявка схвалена і є основною - показати це
         if app['status'] == 'approved' and app.get('is_primary'):
@@ -498,7 +505,6 @@ async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Скасування заявки користувачем"""
     query = update.callback_query
-    await query.answer()
 
     user_id = query.from_user.id
     app_id = int(query.data.split('_')[2])
@@ -1131,15 +1137,15 @@ async def apply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def apply_photos_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Завершення додавання фото"""
     query = update.callback_query
-    await query.answer()
 
     event = db.get_event(context.user_data['application']['event_id'])
     photos = context.user_data['application'].get('photos', [])
 
     if event['needs_photo'] and len(photos) == 0:
-        await query.message.reply_text("Для цього заходу фото є обов'язковим. Додайте хоча б одне фото.")
+        await query.answer("Для цього заходу фото є обов'язковим. Додайте хоча б одне фото.", show_alert=True)
         return APPLY_PHOTOS
 
+    await query.answer()
     await query.delete_message()
     return await show_application_summary(query.message, context)
 
@@ -1157,10 +1163,7 @@ async def show_application_summary(message, context: ContextTypes.DEFAULT_TYPE):
         f"ПІБ: {app['full_name']}\n"
         f"Телефон: {app['phone']}\n"
         f"Фото додано: {len(app.get('photos', []))}\n\n"
-        f"Підтверджую, що:\n"
-        f"• Мені виповнилося 18 років\n"
-        f"• Я усвідомлюю характер процедури\n"
-        f"• Я усвідомлюю можливі наслідки процедури"
+        f"Підтверджую, що мені виповнилось 18 років"
     )
 
     keyboard = [
