@@ -1044,6 +1044,17 @@ async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
 
+async def close_message_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Закрити (видалити) повідомлення"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        await query.message.delete()
+    except Exception as e:
+        logger.error(f"Не вдалося видалити повідомлення: {e}")
+
+
 # ==================== СТВОРЕННЯ ЗАХОДУ (АДМІН) ====================
 
 async def create_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1779,6 +1790,7 @@ async def publish_application_to_group(context: ContextTypes.DEFAULT_TYPE, appli
             InlineKeyboardButton("✅ Прийняти", callback_data=f"approve_{application_id}"),
             InlineKeyboardButton("❌ Відхилити", callback_data=f"reject_{application_id}")
         ],
+        [InlineKeyboardButton("📋 Стан заявок на цей захід", callback_data=f"view_apps_{app['event_id']}")],
         [InlineKeyboardButton("👤 Профіль кандидата", url=f"tg://user?id={app['user_id']}")]
     ]
 
@@ -1828,10 +1840,8 @@ async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE
     db.update_application_status(application_id, 'approved')
 
     keyboard = [
-        [
-            InlineKeyboardButton("⭐ Обрати основним", callback_data=f"primary_{application_id}"),
-            InlineKeyboardButton("Заявки на захід", callback_data=f"view_apps_{app['event_id']}")
-        ],
+        [InlineKeyboardButton("⭐ Обрати основним", callback_data=f"primary_{application_id}")],
+        [InlineKeyboardButton("📋 Стан заявок на цей захід", callback_data=f"view_apps_{app['event_id']}")],
         [InlineKeyboardButton("👤 Профіль кандидата", url=f"tg://user?id={app['user_id']}")]
     ]
 
@@ -1977,15 +1987,17 @@ async def view_event_applications(update: Update, context: ContextTypes.DEFAULT_
             message += f"   📱 {app['phone']}\n"
             message += f"   Статус: {app['status']}\n"
 
-    keyboard = [[InlineKeyboardButton("◀️ Закрити", callback_data="noop")]]
+    keyboard = [[InlineKeyboardButton("❌ Закрити", callback_data="close_message")]]
 
     # Відправити нове повідомлення замість редагування, бо вихідне повідомлення може містити фото
     try:
-        await query.message.reply_text(
+        sent_message = await query.message.reply_text(
             message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
+        # Автоматично видалити через 30 секунд, якщо користувач не закрив сам
+        asyncio.create_task(auto_delete_message(context, query.message.chat_id, sent_message.message_id, delay=30))
     except Exception as e:
         logger.error(f"Помилка відображення заявок: {e}")
         await query.answer("Помилка відображення заявок", show_alert=True)
@@ -2208,6 +2220,7 @@ def main():
     # Обробники кнопок адміністратора
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern='^noop$'))
+    application.add_handler(CallbackQueryHandler(close_message_callback, pattern='^close_message$'))
     application.add_handler(CallbackQueryHandler(admin_manage_events_button, pattern='^admin_manage_events$'))
     application.add_handler(CallbackQueryHandler(admin_past_events_button, pattern='^past_events$'))
     application.add_handler(CallbackQueryHandler(cancel_event_confirm, pattern='^cancel_event_'))
