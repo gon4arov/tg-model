@@ -23,7 +23,6 @@ from telegram.error import Forbidden, BadRequest, TimedOut, NetworkError
 
 from database import Database
 from constants import (
-    PROCEDURE_TYPES,
     TIME_SLOTS,
     generate_date_options,
     CREATE_EVENT_DATE,
@@ -1009,18 +1008,8 @@ async def create_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     time = query.data.split('_', 1)[1]
     context.user_data['event']['time'] = time
 
-    # Показати типи процедур
-    keyboard = [[InlineKeyboardButton(ptype, callback_data=f"proc_{i}")]
-                for i, ptype in enumerate(PROCEDURE_TYPES)]
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_time")])
-    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
-
-    await query.edit_message_text(
-        "Оберіть тип процедури:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    return CREATE_EVENT_PROCEDURE
+    # Показати типи процедур з БД
+    return await show_procedure_selection(query, context)
 
 
 async def show_procedure_selection(query, context: ContextTypes.DEFAULT_TYPE):
