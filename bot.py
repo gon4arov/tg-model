@@ -3,7 +3,6 @@ import re
 import logging
 import signal
 import sys
-import sqlite3
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -131,8 +130,8 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, ed
                     chat_id=update.effective_chat.id,
                     message_id=context.user_data['last_admin_menu_id']
                 )
-            except:
-                pass  # Ігноруємо помилки, якщо повідомлення вже видалено
+            except Exception as e:
+                logger.debug(f"Не вдалося видалити попереднє меню: {e}")
 
         # Відправляємо нове повідомлення
         message = update.callback_query.message if update.callback_query else update.message
@@ -236,8 +235,8 @@ async def admin_create_event_button(update: Update, context: ContextTypes.DEFAUL
                 chat_id=query.message.chat_id,
                 message_id=context.user_data['last_event_form_message']
             )
-        except:
-            pass  # Ігноруємо помилки, якщо повідомлення вже видалено
+        except Exception as e:
+            logger.debug(f"Не вдалося видалити форму створення заходу: {e}")
 
     # Видалити кнопки з поточного меню одразу (замінити на текст без кнопок)
     try:
@@ -453,18 +452,7 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = query.from_user.id
 
     # Отримати всі заявки користувача
-    conn = db.get_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT a.*, e.procedure_type, e.date, e.time, e.status as event_status
-        FROM applications a
-        JOIN events e ON a.event_id = e.id
-        WHERE a.user_id = ?
-        ORDER BY e.date DESC, e.time DESC
-    ''', (user_id,))
-    applications = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+    applications = db.get_user_applications(user_id)
 
     if not applications:
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="user_back_to_menu")]]
@@ -894,8 +882,8 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=query.message.chat_id,
                     message_id=context.user_data['menu_to_delete']
                 )
-            except:
-                pass  # Ігноруємо помилки, якщо повідомлення вже видалено
+            except Exception as e:
+                logger.debug(f"Не вдалося видалити старе меню: {e}")
 
         success_msg = await query.message.reply_text(
             f"✅ Захід \"{event['procedure']} {event['date']} на {event['time']}\" успішно опубліковано в каналі!"
@@ -905,9 +893,7 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
         # Показати нове меню
-        from telegram import Update as TelegramUpdate
-        new_update = TelegramUpdate(update.update_id, message=success_msg)
-        await show_admin_menu(new_update, context)
+        await show_admin_menu(update, context)
 
     except Exception as e:
         logger.error(f"Помилка створення заходу: {e}")
@@ -1082,7 +1068,7 @@ async def apply_enter_new_data(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
 
-    await query.edit_message_text("Введемо нові дані")
+    await query.delete_message()
     await query.message.reply_text("Введіть ваше повне ім'я (Прізвище Ім'я По батькові):")
     return APPLY_FULL_NAME
 

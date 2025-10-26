@@ -241,6 +241,22 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
+    def get_user_applications(self, user_id: int) -> List[Dict]:
+        """Отримати всі заявки користувача з інформацією про заходи"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT a.*, e.procedure_type, e.date, e.time, e.status as event_status
+            FROM applications a
+            JOIN events e ON a.event_id = e.id
+            WHERE a.user_id = ?
+            ORDER BY e.date DESC, e.time DESC
+        ''', (user_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
     def update_application_group_message_id(self, application_id: int, message_id: int) -> None:
         """Оновити ID повідомлення заявки в групі"""
         conn = self.get_connection()
