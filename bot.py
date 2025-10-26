@@ -764,7 +764,7 @@ async def add_procedure_type_name(update: Update, context: ContextTypes.DEFAULT_
             asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
             return ADD_PROCEDURE_TYPE_NAME
         else:
-            logger.error(f"Помилка додавання типу процедури: {e}")
+            logger.error(f"Помилка додавання типу процедури: {e}", exc_info=True)
             error_msg = await update.message.reply_text("❌ Помилка при додаванні типу")
             asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
             return ConversationHandler.END
