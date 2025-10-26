@@ -78,6 +78,15 @@ def chunk_list(lst, n):
         yield lst[i:i + n]
 
 
+async def auto_delete_message(context, chat_id: int, message_id: int, delay: int = 3):
+    """Автоматичне видалення повідомлення через вказану кількість секунд"""
+    await asyncio.sleep(delay)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logger.debug(f"Не вдалося видалити повідомлення {message_id}: {e}")
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Глобальний обробник помилок"""
     logger.error(f"Exception while handling an update:", exc_info=context.error)
@@ -384,10 +393,12 @@ async def block_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except ValueError:
         keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_block")]]
-        await update.message.reply_text(
+        error_msg = await update.message.reply_text(
             "❌ Невірний ID користувача. Спробуйте ще раз:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        # Автоматично видалити через 3 секунди
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
         return BLOCK_USER_ID
 
     return ConversationHandler.END
@@ -471,11 +482,13 @@ async def clear_db_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_admin_menu(update, context, edit_message=False)
     else:
         keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_clear_db")]]
-        await context.bot.send_message(
+        error_msg = await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="❌ Невірний пароль!\n\nСпробуйте ще раз або натисніть 'Скасувати':",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        # Запустити видалення повідомлення через 3 секунди в фоновому режимі
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
         return CLEAR_DB_PASSWORD
 
     return ConversationHandler.END
@@ -698,30 +711,36 @@ async def add_procedure_type_name(update: Update, context: ContextTypes.DEFAULT_
     name = update.message.text.strip()
 
     if not name or len(name) > 100:
-        await update.message.reply_text(
+        error_msg = await update.message.reply_text(
             "❌ Назва має бути від 1 до 100 символів.\n\n"
             "Спробуйте ще раз:"
         )
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
         return ADD_PROCEDURE_TYPE_NAME
 
     try:
         type_id = db.create_procedure_type(name)
-        await update.message.reply_text(f"✅ Тип процедури '{name}' додано успішно!")
+        success_msg = await update.message.reply_text(f"✅ Тип процедури '{name}' додано успішно!")
 
         # Показати адмін меню
         await show_admin_menu(update, context, edit_message=False)
 
+        # Видалити повідомлення про успіх через 3 секунди
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, success_msg.message_id))
+
         return ConversationHandler.END
     except Exception as e:
         if "UNIQUE constraint failed" in str(e):
-            await update.message.reply_text(
+            error_msg = await update.message.reply_text(
                 "❌ Тип процедури з такою назвою вже існує.\n\n"
                 "Введіть іншу назву:"
             )
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
             return ADD_PROCEDURE_TYPE_NAME
         else:
             logger.error(f"Помилка додавання типу процедури: {e}")
-            await update.message.reply_text("❌ Помилка при додаванні типу")
+            error_msg = await update.message.reply_text("❌ Помилка при додаванні типу")
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
             return ConversationHandler.END
 
 
@@ -777,34 +796,41 @@ async def edit_procedure_type_name(update: Update, context: ContextTypes.DEFAULT
     type_id = context.user_data.get('edit_type_id')
 
     if not type_id:
-        await update.message.reply_text("❌ Помилка: тип не знайдено")
+        error_msg = await update.message.reply_text("❌ Помилка: тип не знайдено")
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
         return ConversationHandler.END
 
     if not name or len(name) > 100:
-        await update.message.reply_text(
+        error_msg = await update.message.reply_text(
             "❌ Назва має бути від 1 до 100 символів.\n\n"
             "Спробуйте ще раз:"
         )
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
         return EDIT_PROCEDURE_TYPE_NAME
 
     try:
         db.update_procedure_type(type_id, name)
-        await update.message.reply_text(f"✅ Назву змінено на '{name}'")
+        success_msg = await update.message.reply_text(f"✅ Назву змінено на '{name}'")
 
         # Показати адмін меню
         await show_admin_menu(update, context, edit_message=False)
 
+        # Видалити повідомлення про успіх через 3 секунди
+        asyncio.create_task(auto_delete_message(context, update.effective_chat.id, success_msg.message_id))
+
         return ConversationHandler.END
     except Exception as e:
         if "UNIQUE constraint failed" in str(e):
-            await update.message.reply_text(
+            error_msg = await update.message.reply_text(
                 "❌ Тип процедури з такою назвою вже існує.\n\n"
                 "Введіть іншу назву:"
             )
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
             return EDIT_PROCEDURE_TYPE_NAME
         else:
             logger.error(f"Помилка редагування типу процедури: {e}")
-            await update.message.reply_text("❌ Помилка при редагуванні типу")
+            error_msg = await update.message.reply_text("❌ Помилка при редагуванні типу")
+            asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
             return ConversationHandler.END
 
 
