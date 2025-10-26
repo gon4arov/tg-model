@@ -466,7 +466,12 @@ async def clear_db_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_procedure_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показ списку типів процедур"""
     query = update.callback_query
-    await query.answer()
+
+    # Безпечний виклик answer() - може вже бути викликаний
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     if not is_admin(query.from_user.id):
         await query.message.reply_text("Немає доступу")
@@ -508,7 +513,12 @@ async def admin_procedure_types(update: Update, context: ContextTypes.DEFAULT_TY
 async def view_procedure_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Перегляд та редагування типу процедури"""
     query = update.callback_query
-    await query.answer()
+
+    # Безпечний виклик answer() - може вже бути викликаний
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     if not is_admin(query.from_user.id):
         await query.message.reply_text("Немає доступу")
