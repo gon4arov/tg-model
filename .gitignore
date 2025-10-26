@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 bot_data.pickle
 img/
+algoritm.txt
