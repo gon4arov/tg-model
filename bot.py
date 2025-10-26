@@ -1977,15 +1977,16 @@ async def view_event_applications(update: Update, context: ContextTypes.DEFAULT_
     if other:
         message += "📥 ІНШІ ЗАЯВКИ:\n"
         for app in other:
-            status_emoji = {
-                'pending': '⏳',
-                'rejected': '❌',
-                'cancelled': '🚫'
-            }.get(app['status'], '❓')
+            status_map = {
+                'pending': ('⏳', 'очікує'),
+                'rejected': ('❌', 'відхилено'),
+                'cancelled': ('🚫', 'скасовано')
+            }
+            status_emoji, status_text = status_map.get(app['status'], ('❓', 'невідомо'))
 
             message += f"{status_emoji} {app['full_name']}\n"
             message += f"   📱 {app['phone']}\n"
-            message += f"   Статус: {app['status']}\n"
+            message += f"   Статус: {status_text}\n"
 
     keyboard = [[InlineKeyboardButton("❌ Закрити", callback_data="close_message")]]
 
