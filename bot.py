@@ -616,11 +616,11 @@ async def delete_procedure_type_confirm(update: Update, context: ContextTypes.DE
     success = db.delete_procedure_type(type_id)
 
     if success:
-        await query.edit_message_text("✅ Тип процедури видалено")
-        await asyncio.sleep(1)
-        # Повернутися до списку типів
-        context.user_data['temp_update'] = update
-        await admin_procedure_types(update, context)
+        keyboard = [[InlineKeyboardButton("◀️ Назад до списку", callback_data="admin_procedure_types")]]
+        await query.edit_message_text(
+            f"✅ Тип процедури '{proc_type['name']}' успішно видалено!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     else:
         status_icon = "✅" if proc_type['is_active'] else "❌"
         keyboard = [
