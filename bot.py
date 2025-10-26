@@ -1342,25 +1342,6 @@ async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # Повідомити користувача
-    try:
-        keyboard = [
-            [
-                InlineKeyboardButton("📋 Мої заявки", callback_data="user_my_applications"),
-                InlineKeyboardButton("ℹ️ Інформація", callback_data="user_info")
-            ]
-        ]
-        await context.bot.send_message(
-            chat_id=app['user_id'],
-            text="Вашу заявку схвалено!\n\nОчікуйте на додаткову інформацію.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    except Forbidden:
-        db.block_user(app['user_id'])
-        logger.info(f"User {app['user_id']} blocked the bot - marked as blocked in DB")
-    except Exception as e:
-        logger.error(f"Не вдалося надіслати повідомлення користувачу: {e}")
-
 
 async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Відхилити заявку"""
