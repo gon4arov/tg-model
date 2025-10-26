@@ -36,7 +36,9 @@ from constants import (
     APPLY_PHONE,
     APPLY_PHOTOS,
     APPLY_CONFIRM,
-    BLOCK_USER_ID
+    BLOCK_USER_ID,
+    ADD_PROCEDURE_TYPE_NAME,
+    EDIT_PROCEDURE_TYPE_NAME
 )
 
 # Завантаження змінних середовища
