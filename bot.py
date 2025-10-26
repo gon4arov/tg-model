@@ -1977,13 +1977,18 @@ async def view_event_applications(update: Update, context: ContextTypes.DEFAULT_
             message += f"   📱 {app['phone']}\n"
             message += f"   Статус: {app['status']}\n"
 
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin_manage_events")]]
+    keyboard = [[InlineKeyboardButton("◀️ Закрити", callback_data="noop")]]
 
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
+    # Відправити нове повідомлення замість редагування, бо вихідне повідомлення може містити фото
+    try:
+        await query.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Помилка відображення заявок: {e}")
+        await query.answer("Помилка відображення заявок", show_alert=True)
 
 
 # ==================== ПОВІДОМЛЕННЯ КАНДИДАТУ ====================
