@@ -37,7 +37,8 @@ from constants import (
     APPLY_CONFIRM,
     BLOCK_USER_ID,
     ADD_PROCEDURE_TYPE_NAME,
-    EDIT_PROCEDURE_TYPE_NAME
+    EDIT_PROCEDURE_TYPE_NAME,
+    CLEAR_DB_PASSWORD
 )
 
 # Завантаження змінних середовища
@@ -404,25 +405,19 @@ async def cancel_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ОЧИСТКА БД ====================
 
-async def admin_clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Підтвердження очистки БД"""
+async def admin_clear_db_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка кнопки очистки БД - запит пароля"""
     query = update.callback_query
     await query.answer()
 
     if not is_admin(query.from_user.id):
         await query.message.reply_text("Немає доступу")
-        return
+        return ConversationHandler.END
 
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Так, очистити", callback_data="clear_db_confirm"),
-            InlineKeyboardButton("❌ Скасувати", callback_data="back_to_menu")
-        ]
-    ]
+    keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_clear_db")]]
 
     await query.edit_message_text(
-        "⚠️ УВАГА!\n\n"
-        "Ви збираєтеся повністю очистити базу даних.\n\n"
+        "⚠️ УВАГА! Очистка бази даних\n\n"
         "Будуть видалені:\n"
         "• Всі заходи\n"
         "• Всі заявки\n"
@@ -430,35 +425,57 @@ async def admin_clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Всі користувачі\n"
         "• Всі типи процедур (окрім початкових)\n\n"
         "❗️ Ця дія незворотна!\n\n"
-        "Продовжити?",
+        "Для підтвердження введіть пароль:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+    return CLEAR_DB_PASSWORD
 
-async def clear_db_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Виконання очистки БД"""
+
+async def clear_db_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перевірка пароля та виконання очистки БД"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Немає доступу")
+        return ConversationHandler.END
+
+    password = update.message.text.strip()
+
+    if password == "medicalaser":
+        try:
+            await update.message.reply_text("⏳ Очистка бази даних...")
+            db.clear_all_data()
+            await asyncio.sleep(1)
+            await update.message.reply_text("✅ База даних успішно очищена!")
+            await asyncio.sleep(2)
+            await show_admin_menu(update, context, edit_message=False)
+        except Exception as e:
+            logger.error(f"Помилка при очистці БД: {e}")
+            await update.message.reply_text(
+                "❌ Помилка при очистці бази даних.\n"
+                "Деталі записано в лог."
+            )
+            await asyncio.sleep(2)
+            await show_admin_menu(update, context, edit_message=False)
+    else:
+        keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_clear_db")]]
+        await update.message.reply_text(
+            "❌ Невірний пароль!\n\n"
+            "Спробуйте ще раз або натисніть 'Скасувати':",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return CLEAR_DB_PASSWORD
+
+    return ConversationHandler.END
+
+
+async def cancel_clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Скасування очистки БД"""
     query = update.callback_query
     await query.answer()
 
-    if not is_admin(query.from_user.id):
-        await query.message.reply_text("Немає доступу")
-        return
+    await show_admin_menu(update, context, edit_message=True)
 
-    try:
-        await query.edit_message_text("⏳ Очистка бази даних...")
-        db.clear_all_data()
-        await asyncio.sleep(1)
-        await query.edit_message_text("✅ База даних успішно очищена!")
-        await asyncio.sleep(2)
-        await show_admin_menu(update, context, edit_message=True)
-    except Exception as e:
-        logger.error(f"Помилка при очистці БД: {e}")
-        await query.edit_message_text(
-            "❌ Помилка при очистці бази даних.\n"
-            "Деталі записано в лог."
-        )
-        await asyncio.sleep(2)
-        await show_admin_menu(update, context, edit_message=True)
+    return ConversationHandler.END
 
 
 # ==================== ТИПИ ПРОЦЕДУР ====================
@@ -2121,12 +2138,28 @@ def main():
         allow_reentry=True
     )
 
+    # Обробник очистки БД з паролем
+    clear_db_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_clear_db_button, pattern='^admin_clear_db$')],
+        states={
+            CLEAR_DB_PASSWORD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, clear_db_password),
+                CallbackQueryHandler(cancel_clear_db, pattern='^cancel_clear_db$')
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(cancel_clear_db, pattern='^cancel_clear_db$')],
+        name="clear_db_conversation",
+        persistent=True,
+        allow_reentry=True
+    )
+
     # Додати обробники (ConversationHandlers мають вищий пріоритет - group 0)
     application.add_handler(create_event_handler, group=0)
     application.add_handler(apply_event_handler, group=0)
     application.add_handler(block_user_handler, group=0)
     application.add_handler(add_procedure_type_handler, group=0)
     application.add_handler(edit_procedure_type_handler, group=0)
+    application.add_handler(clear_db_handler, group=0)
 
     # Обробники кнопок адміністратора
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
@@ -2140,8 +2173,6 @@ def main():
     application.add_handler(CallbackQueryHandler(toggle_procedure_type_handler, pattern='^pt_toggle_'))
     application.add_handler(CallbackQueryHandler(delete_procedure_type_confirm, pattern='^pt_delete_confirm_'))
     application.add_handler(CallbackQueryHandler(delete_procedure_type_handler, pattern='^pt_delete_'))
-    application.add_handler(CallbackQueryHandler(admin_clear_db, pattern='^admin_clear_db$'))
-    application.add_handler(CallbackQueryHandler(clear_db_confirm, pattern='^clear_db_confirm$'))
 
     # Обробники кнопок користувача
     application.add_handler(CallbackQueryHandler(user_my_applications, pattern='^user_my_applications$'))

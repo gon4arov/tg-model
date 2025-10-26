@@ -27,6 +27,9 @@ BLOCK_USER_ID = 201
 # Стани для керування типами процедур
 (ADD_PROCEDURE_TYPE_NAME, EDIT_PROCEDURE_TYPE_NAME) = range(300, 302)
 
+# Стан для очистки БД
+CLEAR_DB_PASSWORD = 400
+
 def generate_time_slots():
     """Генерація часових слотів від 9:00 до 17:00 з інтервалом 10 хвилин"""
     slots = []
