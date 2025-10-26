@@ -471,15 +471,41 @@ async def clear_db_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text="✅ База даних успішно очищена!"
             )
             await asyncio.sleep(2)
-            await show_admin_menu(update, context, edit_message=False)
+
+            # Відправити адмін меню через context.bot, бо update.message вже видалено
+            keyboard = [
+                [InlineKeyboardButton("🆕 Створити новий захід", callback_data="admin_create_event")],
+                [InlineKeyboardButton("📋 Переглянути заходи", callback_data="admin_manage_events")],
+                [InlineKeyboardButton("💉 Типи процедур", callback_data="admin_procedure_types")],
+                [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")],
+                [InlineKeyboardButton("🗑️ Очистити БД", callback_data="admin_clear_db")]
+            ]
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Оберіть дію:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         except Exception as e:
-            logger.error(f"Помилка при очистці БД: {e}")
+            logger.error(f"Помилка при очистці БД: {e}", exc_info=True)
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="❌ Помилка при очистці бази даних.\nДеталі записано в лог."
             )
             await asyncio.sleep(2)
-            await show_admin_menu(update, context, edit_message=False)
+
+            # Відправити адмін меню через context.bot
+            keyboard = [
+                [InlineKeyboardButton("🆕 Створити новий захід", callback_data="admin_create_event")],
+                [InlineKeyboardButton("📋 Переглянути заходи", callback_data="admin_manage_events")],
+                [InlineKeyboardButton("💉 Типи процедур", callback_data="admin_procedure_types")],
+                [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")],
+                [InlineKeyboardButton("🗑️ Очистити БД", callback_data="admin_clear_db")]
+            ]
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Оберіть дію:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
     else:
         keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_clear_db")]]
         error_msg = await context.bot.send_message(
