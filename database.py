@@ -419,11 +419,18 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
+        # Спочатку отримати назву типу
+        cursor.execute('SELECT name FROM procedure_types WHERE id = ?', (type_id,))
+        result = cursor.fetchone()
+
+        if not result:
+            conn.close()
+            return False  # Тип не знайдено
+
+        type_name = result[0]
+
         # Перевірити чи використовується цей тип в заходах
-        cursor.execute('''
-            SELECT COUNT(*) FROM events
-            WHERE procedure_type = (SELECT name FROM procedure_types WHERE id = ?)
-        ''', (type_id,))
+        cursor.execute('SELECT COUNT(*) FROM events WHERE procedure_type = ?', (type_name,))
         count = cursor.fetchone()[0]
 
         if count > 0:
