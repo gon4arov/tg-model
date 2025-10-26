@@ -290,22 +290,18 @@ async def admin_manage_events_button(update: Update, context: ContextTypes.DEFAU
     keyboard = []
 
     for event in events:
-        # Скорочена назва процедури для кнопок
-        procedure_short = event['procedure_type'][:20] + '...' if len(event['procedure_type']) > 20 else event['procedure_type']
-        date_short = format_date(event['date']).split(',')[0] if ',' in format_date(event['date']) else format_date(event['date'])
-
-        # Кнопки для кожного заходу з інформацією про захід
+        # Широка кнопка з назвою заходу (без дії)
         keyboard.append([
             InlineKeyboardButton(
-                f"👥 {procedure_short} {date_short}",
-                callback_data=f"view_apps_{event['id']}"
+                f"📅 {event['procedure_type']} - {format_date(event['date'])} о {event['time']}",
+                callback_data="noop"
             )
         ])
+
+        # Дві кнопки по 50% ширини
         keyboard.append([
-            InlineKeyboardButton(
-                f"❌ Скасувати: {procedure_short} {date_short}",
-                callback_data=f"cancel_event_{event['id']}"
-            )
+            InlineKeyboardButton("📋 Заявки", callback_data=f"view_apps_{event['id']}"),
+            InlineKeyboardButton("❌ Скасувати", callback_data=f"cancel_event_{event['id']}")
         ])
 
     keyboard.append([InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")])
@@ -564,6 +560,12 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     await show_admin_menu(update, context, edit_message=True)
+
+
+async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробник для кнопок без дії (тільки для відображення)"""
+    query = update.callback_query
+    await query.answer()
 
 
 # ==================== СТВОРЕННЯ ЗАХОДУ (АДМІН) ====================
@@ -1433,21 +1435,62 @@ async def view_event_applications(update: Update, context: ContextTypes.DEFAULT_
         return
 
     event_id = int(query.data.split('_')[2])
-    applications = db.get_approved_applications(event_id)
+    all_applications = db.get_applications_by_event(event_id)
 
-    if not applications:
-        await query.answer("Немає затверджених заявок", show_alert=True)
+    if not all_applications:
+        await query.answer("Немає заявок на цей захід", show_alert=True)
         return
 
     await query.answer()
 
-    message = "Затверджені заявки на захід:\n\n"
+    # Отримати інформацію про захід
+    event = db.get_event(event_id)
 
-    for i, app in enumerate(applications):
-        status = "Основний" if app['is_primary'] else f"{i + 1}."
-        message += f"{status} {app['full_name']} - {app['phone']}\n"
+    # Сортуємо заявки: спочатку основний, потім схвалені, потім решта
+    primary = [app for app in all_applications if app['is_primary'] == 1]
+    approved = [app for app in all_applications if app['status'] == 'approved' and app['is_primary'] == 0]
+    other = [app for app in all_applications if app['status'] != 'approved']
 
-    await query.message.reply_text(message)
+    message = f"📋 Заявки на захід:\n"
+    message += f"📅 {event['procedure_type']}\n"
+    message += f"🕐 {format_date(event['date'])} о {event['time']}\n\n"
+
+    # Основний кандидат (червоним через HTML)
+    if primary:
+        app = primary[0]
+        message += f"🔴 <b>ОСНОВНИЙ КАНДИДАТ:</b>\n"
+        message += f"   👤 {app['full_name']}\n"
+        message += f"   📱 {app['phone']}\n\n"
+
+    # Схвалені заявки (жирним)
+    if approved:
+        message += "<b>✅ СХВАЛЕНІ ЗАЯВКИ:</b>\n"
+        for i, app in enumerate(approved, 1):
+            message += f"<b>{i}. {app['full_name']}</b>\n"
+            message += f"   📱 {app['phone']}\n"
+        message += "\n"
+
+    # Інші заявки (pending, rejected, cancelled)
+    if other:
+        message += "📥 ІНШІ ЗАЯВКИ:\n"
+        for app in other:
+            status_emoji = {
+                'pending': '⏳',
+                'rejected': '❌',
+                'cancelled': '🚫'
+            }.get(app['status'], '❓')
+
+            message += f"{status_emoji} {app['full_name']}\n"
+            message += f"   📱 {app['phone']}\n"
+            message += f"   Статус: {app['status']}\n"
+
+    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin_manage_events")]]
+
+    await query.edit_message_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
+    )
 
 
 # ==================== ПОВІДОМЛЕННЯ КАНДИДАТУ ====================
@@ -1618,6 +1661,7 @@ def main():
 
     # Обробники кнопок адміністратора
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
+    application.add_handler(CallbackQueryHandler(noop_callback, pattern='^noop$'))
     application.add_handler(CallbackQueryHandler(admin_manage_events_button, pattern='^admin_manage_events$'))
     application.add_handler(CallbackQueryHandler(cancel_event_confirm, pattern='^cancel_event_'))
     application.add_handler(CallbackQueryHandler(confirm_cancel_event, pattern='^confirm_cancel_event_'))
