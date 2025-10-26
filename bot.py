@@ -440,27 +440,40 @@ async def clear_db_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     password = update.message.text.strip()
 
+    # Видалити повідомлення з паролем для безпеки
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.error(f"Не вдалося видалити повідомлення з паролем: {e}")
+
     if password == "medicalaser":
         try:
-            await update.message.reply_text("⏳ Очистка бази даних...")
+            sent_message = await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⏳ Очистка бази даних..."
+            )
             db.clear_all_data()
             await asyncio.sleep(1)
-            await update.message.reply_text("✅ База даних успішно очищена!")
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=sent_message.message_id,
+                text="✅ База даних успішно очищена!"
+            )
             await asyncio.sleep(2)
             await show_admin_menu(update, context, edit_message=False)
         except Exception as e:
             logger.error(f"Помилка при очистці БД: {e}")
-            await update.message.reply_text(
-                "❌ Помилка при очистці бази даних.\n"
-                "Деталі записано в лог."
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Помилка при очистці бази даних.\nДеталі записано в лог."
             )
             await asyncio.sleep(2)
             await show_admin_menu(update, context, edit_message=False)
     else:
         keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="cancel_clear_db")]]
-        await update.message.reply_text(
-            "❌ Невірний пароль!\n\n"
-            "Спробуйте ще раз або натисніть 'Скасувати':",
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Невірний пароль!\n\nСпробуйте ще раз або натисніть 'Скасувати':",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return CLEAR_DB_PASSWORD
