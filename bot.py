@@ -2138,8 +2138,8 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_procedure_types, pattern='^admin_procedure_types$'))
     application.add_handler(CallbackQueryHandler(view_procedure_type, pattern='^pt_view_'))
     application.add_handler(CallbackQueryHandler(toggle_procedure_type_handler, pattern='^pt_toggle_'))
-    application.add_handler(CallbackQueryHandler(delete_procedure_type_handler, pattern='^pt_delete_'))
     application.add_handler(CallbackQueryHandler(delete_procedure_type_confirm, pattern='^pt_delete_confirm_'))
+    application.add_handler(CallbackQueryHandler(delete_procedure_type_handler, pattern='^pt_delete_'))
     application.add_handler(CallbackQueryHandler(admin_clear_db, pattern='^admin_clear_db$'))
     application.add_handler(CallbackQueryHandler(clear_db_confirm, pattern='^clear_db_confirm$'))
 
