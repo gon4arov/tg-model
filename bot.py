@@ -1562,6 +1562,14 @@ async def apply_use_saved_data(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
 
+    # Перевірка наявності даних заявки
+    if 'application' not in context.user_data:
+        await query.message.reply_text(
+            "⚠️ Дані заявки втрачено (можливо, бот було перезапущено).\n\n"
+            "Будь ласка, почніть процес заново командою /start"
+        )
+        return ConversationHandler.END
+
     user = db.get_user(update.effective_user.id)
     context.user_data['application']['full_name'] = user['full_name']
     context.user_data['application']['phone'] = user['phone']
@@ -1595,13 +1603,20 @@ async def apply_enter_new_data(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
 
-    await query.delete_message()
-    await query.message.reply_text("Введіть ваше повне ім'я (Прізвище Ім'я По батькові):")
+    await query.edit_message_text("Введіть ваше повне ім'я (Прізвище Ім'я По батькові):")
     return APPLY_FULL_NAME
 
 
 async def apply_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка ПІБ"""
+    # Перевірка наявності даних заявки (можуть бути втрачені при перезапуску бота)
+    if 'application' not in context.user_data:
+        await update.message.reply_text(
+            "⚠️ Дані заявки втрачено (можливо, бот було перезапущено).\n\n"
+            "Будь ласка, почніть процес заново командою /start"
+        )
+        return ConversationHandler.END
+
     context.user_data['application']['full_name'] = update.message.text
     await update.message.reply_text("ПІБ збережено")
     await update.message.reply_text("Введіть ваш номер телефону:")
@@ -1627,6 +1642,14 @@ def validate_ukrainian_phone(phone: str) -> bool:
 
 async def apply_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка телефону"""
+    # Перевірка наявності даних заявки (можуть бути втрачені при перезапуску бота)
+    if 'application' not in context.user_data:
+        await update.message.reply_text(
+            "⚠️ Дані заявки втрачено (можливо, бот було перезапущено).\n\n"
+            "Будь ласка, почніть процес заново командою /start"
+        )
+        return ConversationHandler.END
+
     phone = update.message.text
 
     # Перевірка українського номера
@@ -1706,6 +1729,15 @@ async def apply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def apply_photos_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Завершення додавання фото"""
     query = update.callback_query
+
+    # Перевірка наявності даних заявки
+    if 'application' not in context.user_data:
+        await query.answer()
+        await query.message.reply_text(
+            "⚠️ Дані заявки втрачено (можливо, бот було перезапущено).\n\n"
+            "Будь ласка, почніть процес заново командою /start"
+        )
+        return ConversationHandler.END
 
     event = db.get_event(context.user_data['application']['event_id'])
     photos = context.user_data['application'].get('photos', [])
