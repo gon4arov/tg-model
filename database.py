@@ -69,8 +69,21 @@ class Database:
             )
         ''')
 
+        # Таблиця типів процедур
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS procedure_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         conn.commit()
         conn.close()
+
+        # Ініціалізувати типи процедур якщо таблиця порожня
+        self._init_procedure_types()
 
     # Методи для роботи з користувачами
     def create_user(self, user_id: int) -> None:
@@ -307,3 +320,118 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [row[0] for row in rows]
+
+    # Методи для роботи з типами процедур
+    def _init_procedure_types(self) -> None:
+        """Ініціалізація типів процедур з constants.py"""
+        from constants import PROCEDURE_TYPES
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Перевірити чи таблиця порожня
+        cursor.execute('SELECT COUNT(*) FROM procedure_types')
+        count = cursor.fetchone()[0]
+
+        if count == 0:
+            # Додати початкові типи процедур
+            for procedure_type in PROCEDURE_TYPES:
+                cursor.execute('''
+                    INSERT INTO procedure_types (name) VALUES (?)
+                ''', (procedure_type,))
+
+        conn.commit()
+        conn.close()
+
+    def get_active_procedure_types(self) -> List[Dict]:
+        """Отримати активні типи процедур"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM procedure_types
+            WHERE is_active = 1
+            ORDER BY name
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_all_procedure_types(self) -> List[Dict]:
+        """Отримати всі типи процедур (включаючи неактивні)"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM procedure_types
+            ORDER BY is_active DESC, name
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_procedure_type(self, type_id: int) -> Optional[Dict]:
+        """Отримати тип процедури за ID"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM procedure_types WHERE id = ?', (type_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def create_procedure_type(self, name: str) -> int:
+        """Створити новий тип процедури"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO procedure_types (name, is_active) VALUES (?, 1)
+        ''', (name,))
+        type_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return type_id
+
+    def update_procedure_type(self, type_id: int, name: str) -> None:
+        """Оновити назву типу процедури"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE procedure_types SET name = ? WHERE id = ?
+        ''', (name, type_id))
+        conn.commit()
+        conn.close()
+
+    def toggle_procedure_type(self, type_id: int) -> None:
+        """Перемкнути активність типу процедури"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE procedure_types
+            SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END
+            WHERE id = ?
+        ''', (type_id,))
+        conn.commit()
+        conn.close()
+
+    def delete_procedure_type(self, type_id: int) -> bool:
+        """Видалити тип процедури (тільки якщо не використовується)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Перевірити чи використовується цей тип в заходах
+        cursor.execute('''
+            SELECT COUNT(*) FROM events
+            WHERE procedure_type = (SELECT name FROM procedure_types WHERE id = ?)
+        ''', (type_id,))
+        count = cursor.fetchone()[0]
+
+        if count > 0:
+            conn.close()
+            return False  # Неможливо видалити, тип використовується
+
+        # Видалити тип
+        cursor.execute('DELETE FROM procedure_types WHERE id = ?', (type_id,))
+        conn.commit()
+        conn.close()
+        return True

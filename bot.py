@@ -3,6 +3,7 @@ import re
 import logging
 import signal
 import sys
+import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -113,6 +114,7 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, ed
     keyboard = [
         [InlineKeyboardButton("🆕 Створити новий захід", callback_data="admin_create_event")],
         [InlineKeyboardButton("📋 Переглянути заходи", callback_data="admin_manage_events")],
+        [InlineKeyboardButton("💉 Типи процедур", callback_data="admin_procedure_types")],
         [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")]
     ]
 
@@ -396,6 +398,302 @@ async def cancel_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_admin_menu(update, context, edit_message=True)
 
     return ConversationHandler.END
+
+
+# ==================== ТИПИ ПРОЦЕДУР ====================
+
+async def admin_procedure_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ списку типів процедур"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    types = db.get_all_procedure_types()
+
+    if not types:
+        keyboard = [[InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")]]
+        await query.edit_message_text(
+            "Немає типів процедур",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    keyboard = []
+
+    for proc_type in types:
+        status = "✅" if proc_type['is_active'] else "❌"
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{status} {proc_type['name']}",
+                callback_data=f"pt_view_{proc_type['id']}"
+            )
+        ])
+
+    keyboard.append([InlineKeyboardButton("➕ Додати новий тип", callback_data="pt_add")])
+    keyboard.append([InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")])
+
+    await query.edit_message_text(
+        "💉 Типи процедур:\n\n"
+        "✅ - активний\n"
+        "❌ - вимкнений\n\n"
+        "Натисніть на тип для редагування",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def view_procedure_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перегляд та редагування типу процедури"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    type_id = int(query.data.split('_')[2])
+    proc_type = db.get_procedure_type(type_id)
+
+    if not proc_type:
+        await query.edit_message_text("Тип не знайдено")
+        return
+
+    status_text = "✅ Активний" if proc_type['is_active'] else "❌ Вимкнений"
+    toggle_text = "❌ Вимкнути" if proc_type['is_active'] else "✅ Увімкнути"
+
+    keyboard = [
+        [InlineKeyboardButton("✏️ Редагувати назву", callback_data=f"pt_edit_{type_id}")],
+        [InlineKeyboardButton(toggle_text, callback_data=f"pt_toggle_{type_id}")],
+        [InlineKeyboardButton("🗑 Видалити", callback_data=f"pt_delete_{type_id}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="admin_procedure_types")]
+    ]
+
+    await query.edit_message_text(
+        f"💉 Тип процедури:\n\n"
+        f"<b>Назва:</b> {proc_type['name']}\n"
+        f"<b>Статус:</b> {status_text}\n"
+        f"<b>Створено:</b> {proc_type['created_at']}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
+    )
+
+
+async def toggle_procedure_type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вимкнути/увімкнути тип процедури"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    type_id = int(query.data.split('_')[2])
+    db.toggle_procedure_type(type_id)
+
+    # Оновити відображення
+    await view_procedure_type(update, context)
+
+
+async def delete_procedure_type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Видалити тип процедури"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    type_id = int(query.data.split('_')[2])
+    proc_type = db.get_procedure_type(type_id)
+
+    if not proc_type:
+        await query.edit_message_text("Тип не знайдено")
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Так, видалити", callback_data=f"pt_delete_confirm_{type_id}"),
+            InlineKeyboardButton("❌ Скасувати", callback_data=f"pt_view_{type_id}")
+        ]
+    ]
+
+    await query.edit_message_text(
+        f"⚠️ Видалити тип процедури '{proc_type['name']}'?\n\n"
+        f"Якщо цей тип використовується в заходах, видалення буде неможливим.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def delete_procedure_type_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Підтвердження видалення типу"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    type_id = int(query.data.split('_')[3])
+    success = db.delete_procedure_type(type_id)
+
+    if success:
+        await query.edit_message_text("✅ Тип процедури видалено")
+        await asyncio.sleep(1)
+        # Повернутися до списку типів
+        context.user_data['temp_update'] = update
+        await admin_procedure_types(update, context)
+    else:
+        await query.edit_message_text(
+            "❌ Неможливо видалити тип процедури.\n\n"
+            "Цей тип використовується в заходах. "
+            "Ви можете вимкнути його замість видалення."
+        )
+        await asyncio.sleep(2)
+        await view_procedure_type(update, context)
+
+
+# ConversationHandler для додавання типу процедури
+async def add_procedure_type_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Початок додавання нового типу процедури"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return ConversationHandler.END
+
+    keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="pt_cancel")]]
+
+    await query.edit_message_text(
+        "➕ Додавання нового типу процедури\n\n"
+        "Введіть назву типу процедури:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return ADD_PROCEDURE_TYPE_NAME
+
+
+async def add_procedure_type_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка назви нового типу"""
+    from constants import ADD_PROCEDURE_TYPE_NAME
+
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Немає доступу")
+        return ConversationHandler.END
+
+    name = update.message.text.strip()
+
+    if not name or len(name) > 100:
+        await update.message.reply_text(
+            "❌ Назва має бути від 1 до 100 символів.\n\n"
+            "Спробуйте ще раз:"
+        )
+        return ADD_PROCEDURE_TYPE_NAME
+
+    try:
+        type_id = db.create_procedure_type(name)
+        await update.message.reply_text(f"✅ Тип процедури '{name}' додано успішно!")
+
+        # Показати адмін меню
+        await show_admin_menu(update, context, edit_message=False)
+
+        return ConversationHandler.END
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            await update.message.reply_text(
+                "❌ Тип процедури з такою назвою вже існує.\n\n"
+                "Введіть іншу назву:"
+            )
+            return ADD_PROCEDURE_TYPE_NAME
+        else:
+            logger.error(f"Помилка додавання типу процедури: {e}")
+            await update.message.reply_text("❌ Помилка при додаванні типу")
+            return ConversationHandler.END
+
+
+async def cancel_procedure_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Скасування додавання/редагування типу"""
+    query = update.callback_query
+    await query.answer()
+
+    await show_admin_menu(update, context, edit_message=True)
+    return ConversationHandler.END
+
+
+# ConversationHandler для редагування типу процедури
+async def edit_procedure_type_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Початок редагування типу процедури"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return ConversationHandler.END
+
+    type_id = int(query.data.split('_')[2])
+    proc_type = db.get_procedure_type(type_id)
+
+    if not proc_type:
+        await query.edit_message_text("Тип не знайдено")
+        return ConversationHandler.END
+
+    context.user_data['edit_type_id'] = type_id
+
+    keyboard = [[InlineKeyboardButton("❌ Скасувати", callback_data="pt_cancel")]]
+
+    await query.edit_message_text(
+        f"✏️ Редагування типу процедури\n\n"
+        f"Поточна назва: {proc_type['name']}\n\n"
+        f"Введіть нову назву:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    return EDIT_PROCEDURE_TYPE_NAME
+
+
+async def edit_procedure_type_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка нової назви типу"""
+    from constants import EDIT_PROCEDURE_TYPE_NAME
+
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Немає доступу")
+        return ConversationHandler.END
+
+    name = update.message.text.strip()
+    type_id = context.user_data.get('edit_type_id')
+
+    if not type_id:
+        await update.message.reply_text("❌ Помилка: тип не знайдено")
+        return ConversationHandler.END
+
+    if not name or len(name) > 100:
+        await update.message.reply_text(
+            "❌ Назва має бути від 1 до 100 символів.\n\n"
+            "Спробуйте ще раз:"
+        )
+        return EDIT_PROCEDURE_TYPE_NAME
+
+    try:
+        db.update_procedure_type(type_id, name)
+        await update.message.reply_text(f"✅ Назву змінено на '{name}'")
+
+        # Показати адмін меню
+        await show_admin_menu(update, context, edit_message=False)
+
+        return ConversationHandler.END
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            await update.message.reply_text(
+                "❌ Тип процедури з такою назвою вже існує.\n\n"
+                "Введіть іншу назву:"
+            )
+            return EDIT_PROCEDURE_TYPE_NAME
+        else:
+            logger.error(f"Помилка редагування типу процедури: {e}")
+            await update.message.reply_text("❌ Помилка при редагуванні типу")
+            return ConversationHandler.END
 
 
 async def cancel_event_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -725,8 +1023,19 @@ async def create_event_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_procedure_selection(query, context: ContextTypes.DEFAULT_TYPE):
     """Показати вибір процедури"""
-    keyboard = [[InlineKeyboardButton(ptype, callback_data=f"proc_{i}")]
-                for i, ptype in enumerate(PROCEDURE_TYPES)]
+    # Отримати активні типи процедур з БД
+    procedure_types = db.get_active_procedure_types()
+
+    if not procedure_types:
+        await query.edit_message_text(
+            "❌ Немає доступних типів процедур.\n\n"
+            "Адміністратор має додати типи процедур через меню.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Скасувати", callback_data="cancel")]])
+        )
+        return ConversationHandler.END
+
+    keyboard = [[InlineKeyboardButton(ptype['name'], callback_data=f"proc_{ptype['id']}")]
+                for ptype in procedure_types]
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_time")])
     keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
 
@@ -747,8 +1056,14 @@ async def create_event_procedure(update: Update, context: ContextTypes.DEFAULT_T
     if query.data == "back_to_procedure":
         return await show_procedure_selection(query, context)
 
-    proc_index = int(query.data.split('_')[1])
-    context.user_data['event']['procedure'] = PROCEDURE_TYPES[proc_index]
+    proc_type_id = int(query.data.split('_')[1])
+    proc_type = db.get_procedure_type(proc_type_id)
+
+    if not proc_type:
+        await query.edit_message_text("❌ Тип процедури не знайдено")
+        return ConversationHandler.END
+
+    context.user_data['event']['procedure'] = proc_type['name']
 
     keyboard = [
         [
@@ -1704,10 +2019,42 @@ def main():
         allow_reentry=True
     )
 
+    # Обробник додавання типу процедури
+    add_procedure_type_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_procedure_type_start, pattern='^pt_add$')],
+        states={
+            ADD_PROCEDURE_TYPE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_procedure_type_name),
+                CallbackQueryHandler(cancel_procedure_type, pattern='^pt_cancel$')
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(cancel_procedure_type, pattern='^pt_cancel$')],
+        name="add_procedure_type_conversation",
+        persistent=True,
+        allow_reentry=True
+    )
+
+    # Обробник редагування типу процедури
+    edit_procedure_type_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_procedure_type_start, pattern='^pt_edit_')],
+        states={
+            EDIT_PROCEDURE_TYPE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_procedure_type_name),
+                CallbackQueryHandler(cancel_procedure_type, pattern='^pt_cancel$')
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(cancel_procedure_type, pattern='^pt_cancel$')],
+        name="edit_procedure_type_conversation",
+        persistent=True,
+        allow_reentry=True
+    )
+
     # Додати обробники (ConversationHandlers мають вищий пріоритет - group 0)
     application.add_handler(create_event_handler, group=0)
     application.add_handler(apply_event_handler, group=0)
     application.add_handler(block_user_handler, group=0)
+    application.add_handler(add_procedure_type_handler, group=0)
+    application.add_handler(edit_procedure_type_handler, group=0)
 
     # Обробники кнопок адміністратора
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
@@ -1716,6 +2063,11 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_past_events_button, pattern='^past_events$'))
     application.add_handler(CallbackQueryHandler(cancel_event_confirm, pattern='^cancel_event_'))
     application.add_handler(CallbackQueryHandler(confirm_cancel_event, pattern='^confirm_cancel_event_'))
+    application.add_handler(CallbackQueryHandler(admin_procedure_types, pattern='^admin_procedure_types$'))
+    application.add_handler(CallbackQueryHandler(view_procedure_type, pattern='^pt_view_'))
+    application.add_handler(CallbackQueryHandler(toggle_procedure_type_handler, pattern='^pt_toggle_'))
+    application.add_handler(CallbackQueryHandler(delete_procedure_type_handler, pattern='^pt_delete_'))
+    application.add_handler(CallbackQueryHandler(delete_procedure_type_confirm, pattern='^pt_delete_confirm_'))
 
     # Обробники кнопок користувача
     application.add_handler(CallbackQueryHandler(user_my_applications, pattern='^user_my_applications$'))

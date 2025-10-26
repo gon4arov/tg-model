@@ -24,6 +24,9 @@ DAYS_OF_WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд']
 MESSAGE_TO_CANDIDATE = 200
 BLOCK_USER_ID = 201
 
+# Стани для керування типами процедур
+(ADD_PROCEDURE_TYPE_NAME, EDIT_PROCEDURE_TYPE_NAME) = range(300, 302)
+
 def generate_time_slots():
     """Генерація часових слотів від 9:00 до 17:00 з інтервалом 10 хвилин"""
     slots = []
