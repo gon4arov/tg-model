@@ -442,3 +442,24 @@ class Database:
         conn.commit()
         conn.close()
         return True
+
+    def clear_all_data(self) -> None:
+        """Повна очистка всіх даних в БД (структура таблиць зберігається)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Видалити дані з усіх таблиць (зберігаючи структуру)
+        cursor.execute('DELETE FROM application_photos')
+        cursor.execute('DELETE FROM applications')
+        cursor.execute('DELETE FROM events')
+        cursor.execute('DELETE FROM users')
+        cursor.execute('DELETE FROM procedure_types')
+
+        # Скинути autoincrement лічильники
+        cursor.execute('DELETE FROM sqlite_sequence')
+
+        conn.commit()
+        conn.close()
+
+        # Повернути початкові типи процедур
+        self._init_procedure_types()

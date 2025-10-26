@@ -116,7 +116,8 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, ed
         [InlineKeyboardButton("🆕 Створити новий захід", callback_data="admin_create_event")],
         [InlineKeyboardButton("📋 Переглянути заходи", callback_data="admin_manage_events")],
         [InlineKeyboardButton("💉 Типи процедур", callback_data="admin_procedure_types")],
-        [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")]
+        [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")],
+        [InlineKeyboardButton("🗑️ Очистити БД", callback_data="admin_clear_db")]
     ]
 
     if edit_message and update.callback_query:
@@ -399,6 +400,65 @@ async def cancel_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_admin_menu(update, context, edit_message=True)
 
     return ConversationHandler.END
+
+
+# ==================== ОЧИСТКА БД ====================
+
+async def admin_clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Підтвердження очистки БД"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Так, очистити", callback_data="clear_db_confirm"),
+            InlineKeyboardButton("❌ Скасувати", callback_data="back_to_menu")
+        ]
+    ]
+
+    await query.edit_message_text(
+        "⚠️ УВАГА!\n\n"
+        "Ви збираєтеся повністю очистити базу даних.\n\n"
+        "Будуть видалені:\n"
+        "• Всі заходи\n"
+        "• Всі заявки\n"
+        "• Всі фото\n"
+        "• Всі користувачі\n"
+        "• Всі типи процедур (окрім початкових)\n\n"
+        "❗️ Ця дія незворотна!\n\n"
+        "Продовжити?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def clear_db_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Виконання очистки БД"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    try:
+        await query.edit_message_text("⏳ Очистка бази даних...")
+        db.clear_all_data()
+        await asyncio.sleep(1)
+        await query.edit_message_text("✅ База даних успішно очищена!")
+        await asyncio.sleep(2)
+        await show_admin_menu(update, context, edit_message=True)
+    except Exception as e:
+        logger.error(f"Помилка при очистці БД: {e}")
+        await query.edit_message_text(
+            "❌ Помилка при очистці бази даних.\n"
+            "Деталі записано в лог."
+        )
+        await asyncio.sleep(2)
+        await show_admin_menu(update, context, edit_message=True)
 
 
 # ==================== ТИПИ ПРОЦЕДУР ====================
@@ -2070,6 +2130,8 @@ def main():
     application.add_handler(CallbackQueryHandler(toggle_procedure_type_handler, pattern='^pt_toggle_'))
     application.add_handler(CallbackQueryHandler(delete_procedure_type_handler, pattern='^pt_delete_'))
     application.add_handler(CallbackQueryHandler(delete_procedure_type_confirm, pattern='^pt_delete_confirm_'))
+    application.add_handler(CallbackQueryHandler(admin_clear_db, pattern='^admin_clear_db$'))
+    application.add_handler(CallbackQueryHandler(clear_db_confirm, pattern='^clear_db_confirm$'))
 
     # Обробники кнопок користувача
     application.add_handler(CallbackQueryHandler(user_my_applications, pattern='^user_my_applications$'))
