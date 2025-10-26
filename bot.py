@@ -304,8 +304,48 @@ async def admin_manage_events_button(update: Update, context: ContextTypes.DEFAU
             InlineKeyboardButton("❌ Скасувати", callback_data=f"cancel_event_{event['id']}")
         ])
 
+    keyboard.append([InlineKeyboardButton("📚 Минулі заходи", callback_data="past_events")])
     keyboard.append([InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")])
     await query.edit_message_text("Активні заходи:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def admin_past_events_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка кнопки 'Минулі заходи'"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    events = db.get_past_events()
+
+    if not events:
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin_manage_events")]]
+        await query.edit_message_text(
+            "Немає минулих заходів",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    keyboard = []
+
+    for event in events:
+        # Широка кнопка з назвою заходу (без дії)
+        keyboard.append([
+            InlineKeyboardButton(
+                f"📅 {event['procedure_type']} - {format_date(event['date'])} о {event['time']}",
+                callback_data="noop"
+            )
+        ])
+
+        # Кнопка для перегляду заявок
+        keyboard.append([
+            InlineKeyboardButton("📋 Заявки", callback_data=f"view_apps_{event['id']}")
+        ])
+
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_manage_events")])
+    await query.edit_message_text("Минулі заходи:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def admin_block_user_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1663,6 +1703,7 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern='^noop$'))
     application.add_handler(CallbackQueryHandler(admin_manage_events_button, pattern='^admin_manage_events$'))
+    application.add_handler(CallbackQueryHandler(admin_past_events_button, pattern='^past_events$'))
     application.add_handler(CallbackQueryHandler(cancel_event_confirm, pattern='^cancel_event_'))
     application.add_handler(CallbackQueryHandler(confirm_cancel_event, pattern='^confirm_cancel_event_'))
 

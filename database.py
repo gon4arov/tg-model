@@ -160,14 +160,35 @@ class Database:
         conn.close()
 
     def get_active_events(self) -> List[Dict]:
-        """Отримати активні заходи"""
+        """Отримати активні заходи (від сьогодні)"""
+        from datetime import datetime
+        today = datetime.now().strftime('%Y-%m-%d')
+
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT * FROM events WHERE status = 'published'
+            SELECT * FROM events
+            WHERE status = 'published' AND date >= ?
             ORDER BY date, time
-        ''')
+        ''', (today,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_past_events(self) -> List[Dict]:
+        """Отримати минулі заходи (до сьогодні)"""
+        from datetime import datetime
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM events
+            WHERE status = 'published' AND date < ?
+            ORDER BY date DESC, time DESC
+        ''', (today,))
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
