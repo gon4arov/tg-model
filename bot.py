@@ -537,6 +537,12 @@ async def delete_procedure_type_confirm(update: Update, context: ContextTypes.DE
         return
 
     type_id = int(query.data.split('_')[3])
+    proc_type = db.get_procedure_type(type_id)
+
+    if not proc_type:
+        await query.edit_message_text("❌ Тип не знайдено")
+        return
+
     success = db.delete_procedure_type(type_id)
 
     if success:
@@ -546,13 +552,18 @@ async def delete_procedure_type_confirm(update: Update, context: ContextTypes.DE
         context.user_data['temp_update'] = update
         await admin_procedure_types(update, context)
     else:
+        status_icon = "✅" if proc_type['is_active'] else "❌"
+        keyboard = [
+            [InlineKeyboardButton(f"{status_icon} Активувати/Деактивувати", callback_data=f"pt_toggle_{type_id}")],
+            [InlineKeyboardButton("⬅️ Назад до списку", callback_data="admin_procedure_types")]
+        ]
+
         await query.edit_message_text(
-            "❌ Неможливо видалити тип процедури.\n\n"
-            "Цей тип використовується в заходах. "
-            "Ви можете вимкнути його замість видалення."
+            f"❌ Неможливо видалити тип процедури '{proc_type['name']}'.\n\n"
+            f"Цей тип використовується в заходах. "
+            f"Ви можете деактивувати його замість видалення.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        await asyncio.sleep(2)
-        await view_procedure_type(update, context)
 
 
 # ConversationHandler для додавання типу процедури
