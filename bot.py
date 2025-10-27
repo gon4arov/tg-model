@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -1639,7 +1639,18 @@ async def apply_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data['application']['full_name'] = update.message.text
     await update.message.reply_text("ПІБ збережено")
-    await update.message.reply_text("Введіть ваш номер телефону:")
+
+    # Клавіатура з кнопкою для надсилання контакту
+    keyboard = [
+        [KeyboardButton("📱 Надіслати мій номер", request_contact=True)],
+        [KeyboardButton("✍️ Ввести номер вручну")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+    await update.message.reply_text(
+        "Введіть ваш номер телефону або натисніть кнопку нижче:",
+        reply_markup=reply_markup
+    )
     return APPLY_PHONE
 
 
@@ -1666,26 +1677,47 @@ async def apply_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'application' not in context.user_data:
         await update.message.reply_text(
             "⚠️ Дані заявки втрачено (можливо, бот було перезапущено).\n\n"
-            "Будь ласка, почніть процес заново командою /start"
+            "Будь ласка, почніть процес заново командою /start",
+            reply_markup=ReplyKeyboardRemove()
         )
         return ConversationHandler.END
 
-    phone = update.message.text
-
-    # Перевірка українського номера
-    if not validate_ukrainian_phone(phone):
+    # Обробка контакту (якщо користувач натиснув кнопку "Надіслати мій номер")
+    if update.message.contact:
+        phone = update.message.contact.phone_number
+        # Якщо номер не починається з +, додаємо +
+        if not phone.startswith('+'):
+            phone = '+' + phone
+    # Обробка тексту "✍️ Ввести номер вручну" - повторно показуємо інструкцію
+    elif update.message.text == "✍️ Ввести номер вручну":
         await update.message.reply_text(
-            "Невірний формат телефону.\n\n"
+            "Введіть ваш номер телефону:\n\n"
             "Приклади правильного формату:\n"
             "+380501234567\n"
             "0501234567\n"
-            "050 123 45 67\n\n"
-            "Введіть номер українського оператора:"
+            "050 123 45 67",
+            reply_markup=ReplyKeyboardRemove()
         )
         return APPLY_PHONE
+    # Обробка текстового номера
+    else:
+        phone = update.message.text
+
+        # Перевірка українського номера
+        if not validate_ukrainian_phone(phone):
+            await update.message.reply_text(
+                "Невірний формат телефону.\n\n"
+                "Приклади правильного формату:\n"
+                "+380501234567\n"
+                "0501234567\n"
+                "050 123 45 67\n\n"
+                "Введіть номер українського оператора:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return APPLY_PHONE
 
     context.user_data['application']['phone'] = phone
-    await update.message.reply_text("Телефон збережено")
+    await update.message.reply_text("Телефон збережено", reply_markup=ReplyKeyboardRemove())
 
     # Зберегти дані користувача
     db.update_user(
@@ -2218,6 +2250,7 @@ def main():
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
             APPLY_PHONE: [
+                MessageHandler(filters.CONTACT, apply_phone),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, apply_phone),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
