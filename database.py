@@ -189,6 +189,30 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
+    def get_events_by_ids(self, event_ids: List[int]) -> List[Dict]:
+        """Отримати перелік заходів за списком ID"""
+        if not event_ids:
+            return []
+
+        placeholders = ','.join('?' for _ in event_ids)
+        query = f'''
+            SELECT *
+            FROM events
+            WHERE id IN ({placeholders})
+        '''
+
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(query, tuple(event_ids))
+        rows = cursor.fetchall()
+        conn.close()
+
+        events = [dict(row) for row in rows]
+        # Сортуємо за датою, часом та ID для стабільного порядку
+        events.sort(key=lambda item: (item['date'], item['time'], item['id']))
+        return events
+
     def get_past_events(self) -> List[Dict]:
         """Отримати минулі заходи (до сьогодні)"""
         from datetime import datetime
