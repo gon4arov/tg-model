@@ -1534,15 +1534,19 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.debug(f"Не вдалося видалити старе меню: {e}")
 
+        # Зберегти дату для можливого повторного використання
+        saved_date = event['date']
+
+        # Кнопка для додавання ще одного заходу на цю дату
+        keyboard = [[InlineKeyboardButton("➕ Додати ще захід на цю дату", callback_data=f"same_date_{saved_date}")]]
+
         success_msg = await query.message.reply_text(
-            f"✅ Захід \"{event['procedure']} {event['date']} на {event['time']}\" успішно опубліковано в каналі!"
+            f"✅ Захід \"{event['procedure']} {event['date']} на {event['time']}\" успішно опубліковано в каналі!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
         # Очистити дані
         context.user_data.clear()
-
-        # Показати нове меню
-        await show_admin_menu(update, context)
 
     except Exception as e:
         logger.error(f"Помилка створення заходу: {e}")
@@ -1552,6 +1556,40 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
     return ConversationHandler.END
+
+
+async def create_event_same_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Створення ще одного заходу на ту саму дату"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return ConversationHandler.END
+
+    # Отримати дату з callback_data
+    date_str = query.data.split('_', 2)[2]  # same_date_2024-01-15 -> 2024-01-15
+
+    # Видалити повідомлення з кнопкою
+    await query.delete_message()
+
+    # Ініціалізувати нові дані для заходу з попередньою датою
+    context.user_data.clear()
+    context.user_data['event'] = {'date': date_str}
+
+    # Показати вибір часу
+    time_buttons = [InlineKeyboardButton(time, callback_data=f"time_{time}")
+                    for time in TIME_SLOTS]
+    keyboard = list(chunk_list(time_buttons, 6))
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel")])
+
+    sent_msg = await query.message.reply_text(
+        f"Дата: {format_date(date_str)}\n\nОберіть час заходу:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    context.user_data['last_event_form_message'] = sent_msg.message_id
+
+    return CREATE_EVENT_TIME
 
 
 async def publish_event_to_channel(context: ContextTypes.DEFAULT_TYPE, event_id: int):
@@ -2293,7 +2331,8 @@ def main():
             CommandHandler('create_event', create_event_start),
             CommandHandler('new_event', create_event_start),
             CallbackQueryHandler(admin_create_event_button, pattern='^admin_create_event$'),
-            MessageHandler(filters.TEXT & filters.Regex('^🆕 Новий захід$'), create_event_start)
+            MessageHandler(filters.TEXT & filters.Regex('^🆕 Новий захід$'), create_event_start),
+            CallbackQueryHandler(create_event_same_date, pattern='^same_date_')
         ],
         states={
             CREATE_EVENT_DATE: [
