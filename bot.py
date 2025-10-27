@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -125,9 +125,7 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, ed
     keyboard = [
         [InlineKeyboardButton("🆕 Створити новий захід", callback_data="admin_create_event")],
         [InlineKeyboardButton("📋 Переглянути заходи", callback_data="admin_manage_events")],
-        [InlineKeyboardButton("💉 Типи процедур", callback_data="admin_procedure_types")],
-        [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")],
-        [InlineKeyboardButton("🗑️ Очистити БД", callback_data="admin_clear_db")]
+        [InlineKeyboardButton("⚙️ Налаштування", callback_data="admin_settings")]
     ]
 
     if edit_message and update.callback_query:
@@ -156,6 +154,28 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, ed
 
         # Зберегти ID нового меню
         context.user_data['last_admin_menu_id'] = sent_message.message_id
+
+
+async def show_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Відображення меню налаштувань адміністратора"""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.message.reply_text("Немає доступу")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("💉 Типи процедур", callback_data="admin_procedure_types")],
+        [InlineKeyboardButton("🚫 Заблокувати користувача", callback_data="admin_block_user")],
+        [InlineKeyboardButton("🗑️ Очистити БД", callback_data="admin_clear_db")],
+        [InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")]
+    ]
+
+    await query.edit_message_text(
+        "Налаштування:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
@@ -2280,6 +2300,7 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern='^noop$'))
     application.add_handler(CallbackQueryHandler(close_message_callback, pattern='^close_message$'))
+    application.add_handler(CallbackQueryHandler(show_admin_settings, pattern='^admin_settings$'))
     application.add_handler(CallbackQueryHandler(admin_manage_events_button, pattern='^admin_manage_events$'))
     application.add_handler(CallbackQueryHandler(admin_past_events_button, pattern='^past_events$'))
     application.add_handler(CallbackQueryHandler(cancel_event_confirm, pattern='^cancel_event_'))
@@ -2307,6 +2328,15 @@ def main():
 
     # Глобальний обробник помилок
     application.add_error_handler(error_handler)
+
+    # Встановлення меню команд (тільки /start)
+    async def post_init(app: Application) -> None:
+        """Налаштування бота після ініціалізації"""
+        await app.bot.set_my_commands([
+            BotCommand("start", "Почати роботу з ботом")
+        ])
+
+    application.post_init = post_init
 
     # Налаштування graceful shutdown
     def signal_handler(sig, frame):
