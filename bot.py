@@ -1808,6 +1808,9 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
     app = context.user_data['application']
 
     try:
+        # Отримати інформацію про захід
+        event = db.get_event(app['event_id'])
+
         # Зберегти заявку
         application_id = db.create_application(
             event_id=app['event_id'],
@@ -1820,9 +1823,15 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for file_id in app.get('photos', []):
             db.add_application_photo(application_id, file_id)
 
+        # Форматування дати
+        event_date = format_date(event['date'])
+
         await query.edit_message_text(
-            "Вашу заявку успішно подано!\n\n"
-            "Очікуйте на розгляд адміністратором."
+            f"✅ Вашу заявку успішно подано!\n\n"
+            f"📋 Процедура: {event['procedure_type']}\n"
+            f"📅 Дата: {event_date}\n"
+            f"🕐 Час: {event['time']}\n\n"
+            f"Очікуйте на розгляд адміністратором."
         )
 
         # Опублікувати в групу
