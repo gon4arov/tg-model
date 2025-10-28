@@ -79,11 +79,36 @@ class Database:
             )
         ''')
 
+        # Таблиця повідомлень по днях
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS day_messages (
+                date TEXT PRIMARY KEY,
+                message_id INTEGER
+            )
+        ''')
+
         conn.commit()
         conn.close()
 
         # Ініціалізувати типи процедур якщо таблиця порожня
         self._init_procedure_types()
+        self._ensure_schema_upgrades()
+
+    def _add_column_if_missing(self, table: str, column: str, definition: str) -> None:
+        """Додати колонку до таблиці, якщо вона відсутня"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        if column not in existing_columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            conn.commit()
+        conn.close()
+
+    def _ensure_schema_upgrades(self) -> None:
+        """Перевірити та застосувати зміни до схеми БД (зворотна сумісність)"""
+        self._add_column_if_missing('applications', 'position', 'INTEGER DEFAULT 0')
+        self._add_column_if_missing('events', 'applications_message_id', 'INTEGER')
 
     # Методи для роботи з користувачами
     def create_user(self, user_id: int) -> None:
@@ -172,6 +197,26 @@ class Database:
         conn.commit()
         conn.close()
 
+    def update_event_applications_message_id(self, event_id: int, message_id: Optional[int]) -> None:
+        """Зберегти або очистити ID групового повідомлення по заявках"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE events SET applications_message_id = ? WHERE id = ?',
+            (message_id, event_id)
+        )
+        conn.commit()
+        conn.close()
+
+    def get_event_applications_message_id(self, event_id: int) -> Optional[int]:
+        """Отримати ID групового повідомлення із заявками"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT applications_message_id FROM events WHERE id = ?', (event_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row and row[0] is not None else None
+
     def get_active_events(self) -> List[Dict]:
         """Отримати активні заходи (від сьогодні)"""
         from datetime import datetime
@@ -230,6 +275,21 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
+    def get_events_by_date(self, date: str) -> List[Dict]:
+        """Отримати всі заходи на конкретну дату"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT *
+            FROM events
+            WHERE date = ? AND status != 'cancelled'
+            ORDER BY time
+        ''', (date,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
     # Методи для роботи з заявками
     def create_application(self, event_id: int, user_id: int,
                           full_name: str, phone: str) -> int:
@@ -256,20 +316,20 @@ class Database:
         return dict(row) if row else None
 
     def update_application_status(self, application_id: int, status: str) -> None:
-        """Оновити статус заявки"""
+        """Оновити статус заявки та прапорець основного кандидата"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE applications SET status = ? WHERE id = ?', (status, application_id))
+        is_primary = 1 if status == 'primary' else 0
+        cursor.execute(
+            'UPDATE applications SET status = ?, is_primary = ? WHERE id = ?',
+            (status, is_primary, application_id)
+        )
         conn.commit()
         conn.close()
 
     def set_primary_application(self, application_id: int) -> None:
-        """Встановити заявку як основну"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE applications SET is_primary = 1 WHERE id = ?', (application_id,))
-        conn.commit()
-        conn.close()
+        """Позначити заявку основною"""
+        self.update_application_status(application_id, 'primary')
 
     def get_approved_applications(self, event_id: int) -> List[Dict]:
         """Отримати затверджені заявки на захід"""
@@ -291,9 +351,20 @@ class Database:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT * FROM applications
+            SELECT *
+            FROM applications
             WHERE event_id = ?
-            ORDER BY created_at
+            ORDER BY
+                CASE status
+                    WHEN 'primary' THEN 0
+                    WHEN 'approved' THEN 1
+                    WHEN 'pending' THEN 2
+                    WHEN 'cancelled' THEN 3
+                    WHEN 'rejected' THEN 4
+                    ELSE 5
+                END,
+                CASE WHEN position > 0 THEN position ELSE 999 END,
+                created_at
         ''', (event_id,))
         rows = cursor.fetchall()
         conn.close()
@@ -324,6 +395,148 @@ class Database:
         ''', (message_id, application_id))
         conn.commit()
         conn.close()
+
+    def set_application_status(self, application_id: int, status: str) -> None:
+        """Оновити статус заявки та прапорець основного кандидата"""
+        self.update_application_status(application_id, status)
+
+    def update_application_position(self, application_id: int, position: int) -> None:
+        """Змінити позицію заявки у черзі"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE applications
+            SET position = ?
+            WHERE id = ?
+        ''', (position, application_id))
+        conn.commit()
+        conn.close()
+
+    def recalculate_application_positions(self, event_id: int) -> None:
+        """Перерахувати позиції заявок після змін статусів"""
+        applications = self.get_applications_by_event(event_id)
+        primary_id = None
+        reserve_ids: List[int] = []
+
+        for app in applications:
+            status = app['status']
+            if status == 'primary':
+                if primary_id is None:
+                    primary_id = app['id']
+                else:
+                    # Лишаємо лише одного основного кандидата
+                    self.set_application_status(app['id'], 'approved')
+                    reserve_ids.append(app['id'])
+            elif status == 'approved':
+                reserve_ids.append(app['id'])
+
+        position = 1
+        if primary_id:
+            self.update_application_position(primary_id, position)
+            position += 1
+
+        for reserve_id in reserve_ids:
+            self.update_application_position(reserve_id, position)
+            position += 1
+
+        # Скинути позицію для інших статусів
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE applications
+            SET position = 0
+            WHERE event_id = ? AND status NOT IN ('primary', 'approved')
+        ''', (event_id,))
+        conn.commit()
+        conn.close()
+
+    def get_user_applications_for_date(self, user_id: int, date: str) -> List[Dict]:
+        """Отримати всі заявки користувача на конкретну дату"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT a.*, e.procedure_type, e.time, e.status AS event_status
+            FROM applications a
+            JOIN events e ON a.event_id = e.id
+            WHERE a.user_id = ? AND e.date = ?
+        ''', (user_id, date))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    # Методи для роботи з повідомленнями по днях
+    def get_day_message_id(self, date: str) -> Optional[int]:
+        """Отримати ID повідомлення з підсумком по дню"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT message_id FROM day_messages WHERE date = ?', (date,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row and row[0] is not None else None
+
+    def update_day_message_id(self, date: str, message_id: int) -> None:
+        """Зберегти або оновити ID повідомлення по дню"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO day_messages (date, message_id)
+            VALUES (?, ?)
+            ON CONFLICT(date) DO UPDATE SET message_id = excluded.message_id
+        ''', (date, message_id))
+        conn.commit()
+        conn.close()
+
+    def delete_day_message(self, date: str) -> None:
+        """Видалити запис про повідомлення по дню"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM day_messages WHERE date = ?', (date,))
+        conn.commit()
+        conn.close()
+
+    def get_applications_by_group_message(self, group_message_id: int) -> List[Dict]:
+        """Отримати всі заявки, прив'язані до одного повідомлення в групі"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT
+                a.*,
+                e.procedure_type,
+                e.date,
+                e.time,
+                e.needs_photo,
+                e.status AS event_status
+            FROM applications a
+            JOIN events e ON a.event_id = e.id
+            WHERE a.group_message_id = ?
+            ORDER BY e.date, e.time, a.id
+        ''', (group_message_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_application_with_event(self, application_id: int) -> Optional[Dict]:
+        """Отримати заявку разом із даними заходу"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT
+                a.*,
+                e.procedure_type,
+                e.date,
+                e.time,
+                e.needs_photo,
+                e.status AS event_status
+            FROM applications a
+            JOIN events e ON a.event_id = e.id
+            WHERE a.id = ?
+        ''', (application_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
 
     # Методи для роботи з фото заявок
     def add_application_photo(self, application_id: int, file_id: str) -> None:
