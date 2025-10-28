@@ -6,7 +6,7 @@ import sys
 import asyncio
 import html
 from collections import Counter
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -1593,26 +1593,57 @@ async def create_event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule['date'] = date
     context.user_data['event']['date'] = date
 
-    # Показати часові слоти по 5 в ряд (5 стовпчиків)
-    keyboard = list(chunk_list(
-        [InlineKeyboardButton(time, callback_data=f"time_{time}") for time in TIME_SLOTS],
-        5
-    ))
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_date")])
-    keyboard.append([InlineKeyboardButton("❌ Закрити", callback_data="close_admin_dialog")])
+    return await show_time_selection(query, context)
 
-    await query.edit_message_text(
-        "Оберіть час заходу:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
-    return CREATE_EVENT_TIME
+def get_available_time_slots(event_date: Optional[str]) -> List[str]:
+    """Повернути список доступних часових слотів з урахуванням поточного часу"""
+    if not event_date:
+        return TIME_SLOTS
+
+    try:
+        selected_date = datetime.strptime(event_date, '%Y-%m-%d').date()
+    except ValueError:
+        return TIME_SLOTS
+
+    today = datetime.now().date()
+    if selected_date > today or selected_date < today:
+        return TIME_SLOTS
+
+    current_time = datetime.now().time()
+    available = []
+    for slot in TIME_SLOTS:
+        try:
+            slot_time = datetime.strptime(slot, '%H:%M').time()
+        except ValueError:
+            continue
+        if slot_time > current_time:
+            available.append(slot)
+    return available
 
 
 async def show_time_selection(query, context: ContextTypes.DEFAULT_TYPE):
     """Показати вибір часу"""
+    event_date = (
+        context.user_data.get('event', {}).get('date')
+        or context.user_data.get('schedule', {}).get('date')
+    )
+    available_slots = get_available_time_slots(event_date)
+
+    if not available_slots:
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_date")],
+            [InlineKeyboardButton("❌ Закрити", callback_data="close_admin_dialog")]
+        ]
+        await query.edit_message_text(
+            "На вибрану дату неможливо створити захід.\n"
+            "Оберіть іншу дату.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return CREATE_EVENT_TIME
+
     keyboard = list(chunk_list(
-        [InlineKeyboardButton(time, callback_data=f"time_{time}") for time in TIME_SLOTS],
+        [InlineKeyboardButton(time, callback_data=f"time_{time}") for time in available_slots],
         5
     ))
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_date")])
