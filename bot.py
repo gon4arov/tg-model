@@ -33,6 +33,7 @@ from constants import (
     CREATE_EVENT_TIME,
     CREATE_EVENT_PROCEDURE,
     CREATE_EVENT_PHOTO_NEEDED,
+    CREATE_EVENT_COMMENT,
     CREATE_EVENT_CONFIRM,
     CREATE_EVENT_REVIEW,
     APPLY_SELECT_EVENTS,
@@ -1764,9 +1765,59 @@ async def create_event_photo_needed(update: Update, context: ContextTypes.DEFAUL
 
     needs_photo = query.data == "photo_yes"
     context.user_data['event']['needs_photo'] = needs_photo
+    return await show_comment_prompt(query, context)
 
-    # Коментар більше не збирається – одразу показуємо підсумок
-    context.user_data['event'].pop('comment', None)
+
+async def show_comment_prompt(query, context: ContextTypes.DEFAULT_TYPE):
+    """Показати запит на коментар до заходу"""
+    event = context.user_data.setdefault('event', {})
+    comment = event.get('comment')
+
+    hint_lines = [
+        "Додайте коментар до заходу (необов'язково).",
+        "\nВи можете надіслати текст повідомлення або пропустити цей крок."
+    ]
+    if comment:
+        hint_lines.append(f"\nПоточний коментар:\n{comment}")
+
+    keyboard = [
+        [InlineKeyboardButton("⏭ Пропустити", callback_data="skip_comment")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_photo")],
+        [InlineKeyboardButton("❌ Закрити", callback_data="close_admin_dialog")]
+    ]
+
+    message = await query.edit_message_text(
+        "\n".join(hint_lines),
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    context.user_data['last_bot_message_id'] = message.message_id
+    context.user_data['last_bot_chat_id'] = message.chat_id
+
+    return CREATE_EVENT_COMMENT
+
+
+async def skip_event_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пропустити додавання коментаря"""
+    query = update.callback_query
+    await answer_callback_query(query)
+    context.user_data['event']['comment'] = None
+    return await show_event_summary(update, context)
+
+
+async def create_event_comment_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробити введений коментар"""
+    text = (update.message.text or "").strip()
+    if text:
+        context.user_data['event']['comment'] = text
+    else:
+        context.user_data['event']['comment'] = None
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
     return await show_event_summary(update, context)
 
 
@@ -1784,6 +1835,10 @@ async def show_event_summary(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Процедура: {event['procedure']}\n"
         f"Фото від кандидатів: {photo_required}"
     )
+
+    comment = event.get('comment')
+    if comment:
+        summary += f"\nКоментар: {comment}"
 
     keyboard = [
         [InlineKeyboardButton("➕ Додати до плану заходу", callback_data="add_event_to_day")],
@@ -1806,6 +1861,9 @@ async def show_event_summary(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
+    context.user_data.pop('last_bot_message_id', None)
+    context.user_data.pop('last_bot_chat_id', None)
+
     return CREATE_EVENT_CONFIRM
 
 
@@ -1827,6 +1885,8 @@ def build_schedule_overview(schedule: dict) -> str:
             item_lines = [f"{idx}. {item['time']} — {item['procedure']}"]
             if item.get('needs_photo'):
                 item_lines.append("   Потрібне фото зони")
+            if item.get('comment'):
+                item_lines.append(f"   Коментар: {item['comment']}")
             lines.extend(item_lines)
             lines.append("")
     else:
@@ -1887,7 +1947,8 @@ async def add_event_to_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'time': event['time'],
         'procedure': event['procedure'],
         'needs_photo': event['needs_photo'],
-        
+        'comment': event.get('comment')
+
     })
 
     # Зберегти дату для наступної процедури, але очистити інші поля
@@ -1950,7 +2011,7 @@ async def publish_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 time=item['time'],
                 procedure_type=item['procedure'],
                 needs_photo=item['needs_photo'],
-                comment=None
+                comment=item.get('comment')
             )
             created_events.append((event_id, item))
 
@@ -2043,6 +2104,8 @@ async def publish_day_schedule_to_channel(
 
         photo_suffix = " (фото ОБОВЯЗКОВО)" if item.get('needs_photo') else ""
         line_parts = [f"{item['time']} — <b>{procedure_name}</b>{photo_suffix}"]
+        if item.get('comment'):
+            line_parts.append(html.escape(item['comment']))
         event_lines.extend(line_parts)
         event_lines.append("")
 
@@ -2877,7 +2940,6 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
 
     message_text = (
         f"Нова заявка №{application_id}\n\n"
-        f"#захід_{event['id']} #кандидат_{app['user_id']}\n\n"
         f"Процедура: {event['procedure_type']}\n"
         f"Дата: {format_date(event['date'])} {event['time']}\n\n"
         f"ПІБ: {app['full_name']}\n"
@@ -2959,7 +3021,6 @@ def build_group_application_text(applications: list, candidate: dict) -> str:
         lines.append(
             f"{idx}. {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
         )
-        lines.append(f"   #захід_{event['id']} #заявка_{item['id']}")
 
     return "\n".join(lines)
 
@@ -3092,6 +3153,9 @@ def build_day_summary_text(context: ContextTypes.DEFAULT_TYPE, date: str) -> Opt
         header = f"{idx}. {event['time']} — {event['procedure_type']}{photo_note}"
         lines.append(header)
 
+        if event.get('comment'):
+            lines.append(f"   Коментар: {html.escape(event['comment'])}")
+
         if applications:
             status_counter = Counter(app['status'] for app in applications)
             lines.append(f"   Статуси: {format_status_counts(status_counter)}")
@@ -3115,12 +3179,16 @@ def build_day_summary_text(context: ContextTypes.DEFAULT_TYPE, date: str) -> Opt
                 elif status == 'approved':
                     extras.append("резерв")
 
-                extras_text = " " + " ".join(html.escape(part) for part in extras) if extras else ""
+                extras_text = " ".join(html.escape(part) for part in extras) if extras else ""
 
                 link = build_message_link(channel_id, app_record.get('group_message_id'))
                 emoji_markup = f'<a href="{link}">{html.escape(emoji)}</a>' if link else html.escape(emoji)
 
-                line = f"   • {name} — {phone}{count_text}{extras_text} {emoji_markup}"
+                parts = [f"   • {name} — {phone}{count_text}".strip()]
+                if extras_text:
+                    parts.append(extras_text)
+                parts.append(emoji_markup)
+                line = " ".join(part for part in parts if part)
                 lines.append(line)
         else:
             lines.append("   Заявок поки немає.")
@@ -3744,6 +3812,13 @@ def main():
             CREATE_EVENT_PHOTO_NEEDED: [
                 CallbackQueryHandler(create_event_photo_needed, pattern='^photo_'),
                 CallbackQueryHandler(create_event_procedure, pattern='^back_to_procedure$'),
+                CallbackQueryHandler(close_admin_dialog_button, pattern='^close_admin_dialog$'),
+                CallbackQueryHandler(cancel, pattern='^cancel$')
+            ],
+            CREATE_EVENT_COMMENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, create_event_comment_text),
+                CallbackQueryHandler(skip_event_comment, pattern='^skip_comment$'),
+                CallbackQueryHandler(create_event_photo_needed, pattern='^back_to_photo$'),
                 CallbackQueryHandler(close_admin_dialog_button, pattern='^close_admin_dialog$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
