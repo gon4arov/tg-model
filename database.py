@@ -259,7 +259,7 @@ class Database:
         return events
 
     def get_past_events(self) -> List[Dict]:
-        """Отримати минулі заходи (до сьогодні)"""
+        """Отримати останні 10 минулих заходів (до сьогодні)"""
         from datetime import datetime
         today = datetime.now().strftime('%Y-%m-%d')
 
@@ -270,6 +270,7 @@ class Database:
             SELECT * FROM events
             WHERE status = 'published' AND date < ?
             ORDER BY date DESC, time DESC
+            LIMIT 10
         ''', (today,))
         rows = cursor.fetchall()
         conn.close()
