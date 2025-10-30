@@ -3533,7 +3533,7 @@ async def update_day_summary(context: ContextTypes.DEFAULT_TYPE, date: str) -> N
 async def send_primary_instruction(context: ContextTypes.DEFAULT_TYPE, app: dict, event: dict) -> bool:
     """Надіслати кандидату інструкцію для основного учасника"""
     instruction = (
-        f"Вітаємо! Ви обрані основним кандидатом!\n\n"
+        f"Вітаємо! Вашу заявку схвалено!\n\n"
         f"Процедура: {event['procedure_type']}\n"
         f"Дата: {format_date(event['date'])}\n"
         f"Час: {event['time']}\n\n"
