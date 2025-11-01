@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from logging.handlers import RotatingFileHandler
 import signal
 import sys
 import asyncio
@@ -65,11 +66,17 @@ logger.setLevel(logging.DEBUG)
 LOG_FILE = os.getenv('BOT_LOG_FILE', 'bot-actions.log')
 if LOG_FILE:
     try:
-        file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+        # Ротація логів: максимум 10 МБ на файл, зберігаємо 5 резервних копій
+        file_handler = RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=10*1024*1024,  # 10 МБ
+            backupCount=5,           # 5 резервних копій (bot-actions.log.1, .2, .3, .4, .5)
+            encoding='utf-8'
+        )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
         logging.getLogger().addHandler(file_handler)
-        logger.info(f"Логування активовано. Файл: {LOG_FILE}")
+        logger.info(f"Логування активовано. Файл: {LOG_FILE} (ротація: 10 МБ, 5 бекапів)")
     except Exception as err:
         logger.error(f"Не вдалося налаштувати файл логування {LOG_FILE}: {err}")
 
