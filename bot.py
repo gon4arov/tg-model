@@ -31,6 +31,7 @@ from database import Database
 from constants import (
     TIME_SLOTS,
     generate_date_options,
+    UKRAINE_TZ,
     CREATE_EVENT_DATE,
     CREATE_EVENT_TIME,
     CREATE_EVENT_PROCEDURE,
@@ -1761,11 +1762,11 @@ def get_available_time_slots(event_date: Optional[str]) -> List[str]:
     except ValueError:
         return TIME_SLOTS
 
-    today = datetime.now().date()
+    today = datetime.now(UKRAINE_TZ).date()
     if selected_date > today or selected_date < today:
         return TIME_SLOTS
 
-    current_time = datetime.now().time()
+    current_time = datetime.now(UKRAINE_TZ).time()
     available = []
     for slot in TIME_SLOTS:
         try:

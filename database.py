@@ -1,6 +1,10 @@
 import sqlite3
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional, List, Dict, Any
+
+# Часовий пояс України
+UKRAINE_TZ = ZoneInfo("Europe/Kyiv")
 
 class Database:
     def __init__(self, db_path: str = "bot.db"):
@@ -219,8 +223,7 @@ class Database:
 
     def get_active_events(self) -> List[Dict]:
         """Отримати активні заходи (від сьогодні)"""
-        from datetime import datetime
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now(UKRAINE_TZ).strftime('%Y-%m-%d')
 
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row
@@ -260,8 +263,7 @@ class Database:
 
     def get_past_events(self) -> List[Dict]:
         """Отримати останні 10 минулих заходів (до сьогодні)"""
-        from datetime import datetime
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now(UKRAINE_TZ).strftime('%Y-%m-%d')
 
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row

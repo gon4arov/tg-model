@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 # Типи процедур
 PROCEDURE_TYPES = [
@@ -13,6 +14,9 @@ PROCEDURE_TYPES = [
 
 # Дні тижня українською (понеділок = 0, неділя = 6, відповідно до weekday())
 DAYS_OF_WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд']
+
+# Часовий пояс України
+UKRAINE_TZ = ZoneInfo("Europe/Kyiv")
 
 # Стани для ConversationHandler
 (CREATE_EVENT_DATE, CREATE_EVENT_TIME, CREATE_EVENT_PROCEDURE,
@@ -43,7 +47,7 @@ def generate_time_slots():
 def generate_date_options():
     """Генерація дат на найближчі 7 днів"""
     options = []
-    today = datetime.now()
+    today = datetime.now(UKRAINE_TZ)
 
     for i in range(7):
         date = today + timedelta(days=i)
