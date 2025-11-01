@@ -92,6 +92,12 @@ if EVENTS_GROUP_ID and EVENTS_GROUP_ID.lstrip('-').isdigit():
 elif not EVENTS_GROUP_ID and CHANNEL_ID:
     # Fallback на CHANNEL_ID для зворотної сумісності
     EVENTS_GROUP_ID = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
+
+# Перевірка наявності EVENTS_GROUP_ID
+if not EVENTS_GROUP_ID:
+    logger.error("КРИТИЧНА ПОМИЛКА: EVENTS_GROUP_ID не налаштовано в .env файлі!")
+    logger.error("Додайте EVENTS_GROUP_ID=-your_group_id в .env файл")
+    logger.error("Публікація подій не працюватиме без цього параметру")
 GROUP_ID = os.getenv('GROUP_ID', '')
 if GROUP_ID and GROUP_ID.lstrip('-').isdigit():
     GROUP_ID = int(GROUP_ID)
