@@ -3286,12 +3286,14 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
         except ValueError:
             channel_id = int(APPLICATIONS_CHANNEL_ID)
 
+    # Формат як у групових заявках
+    status_icon = format_application_status(app['status'], app.get('is_primary', False))
     message_text = (
-        f"Нова заявка №{application_id}\n\n"
-        f"Процедура: {event['procedure_type']}\n"
-        f"Дата: {format_date(event['date'])} {event['time']}\n\n"
-        f"ПІБ: {app['full_name']}\n"
-        f"Телефон: {app['phone']}"
+        f"Нова заявка від {app['full_name']}\n"
+        f"Телефон: {app['phone']}\n"
+        f"ID користувача: {app['user_id']}\n\n"
+        f"Обрана процедура:\n"
+        f"1. №{application_id} — {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
     )
 
     keyboard = build_single_application_keyboard(app, event)
@@ -3364,10 +3366,11 @@ def build_group_application_text(applications: list, candidate: dict) -> str:
 
     for idx, item in enumerate(applications, start=1):
         event = item['event']
+        app_id = item['id']
         status_icon = format_application_status(item['status'], item.get('is_primary', False))
         photo_note = " (фото обов'язково)" if event.get('needs_photo') else ""
         lines.append(
-            f"{idx}. {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
+            f"{idx}. №{app_id} — {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
         )
 
     return "\n".join(lines)
