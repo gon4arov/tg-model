@@ -3369,10 +3369,10 @@ def format_day_count_text(count: int) -> str:
     if count <= 0:
         return ""
     if count == 1:
-        return " (1 заявка на цей день)"
+        return " (1 заявка від цього кандидата на цей день)"
     if 2 <= count <= 4:
-        return f" ({count} заявки на цей день)"
-    return f" ({count} заявок на цей день)"
+        return f" ({count} заявки від цього кандидата на цей день)"
+    return f" ({count} заявок від цього кандидата на цей день)"
 
 
 def build_message_link(chat_identifier, message_id: Optional[int]) -> Optional[str]:
@@ -3865,7 +3865,7 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"📞 {html.escape(application['phone'])}\n"
                 f"📅 {format_date(event['date'])}\n"
                 f"🕐 {event['time']} - {event['procedure_type']}\n\n"
-                f"Кандидату вже було відправлено інструкції.\n\n"
+                f"Кандидату вже було відправлено повідомлення про обрання його заявки.\n\n"
                 f"Продовжити?"
             )
             keyboard = [
