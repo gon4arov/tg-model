@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+.mcp.json
 *.db
 *.log
 .DS_Store
@@ -9,3 +10,5 @@ __pycache__/
 bot_data.pickle
 img/
 algoritm.txt
+*.png
+*.txt
