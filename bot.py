@@ -84,7 +84,19 @@ if LOG_FILE:
 db = Database()
 
 # Отримання конфігурації з .env
-ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
+# Підтримка кількох адмінів: ADMIN_IDS=123456789,987654321 або ADMIN_ID=123456789
+ADMIN_IDS_STR = os.getenv('ADMIN_IDS', os.getenv('ADMIN_ID', ''))
+if ADMIN_IDS_STR:
+    ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(',') if id.strip().isdigit()]
+else:
+    ADMIN_IDS = []
+
+# Для зворотної сумісності
+ADMIN_ID = ADMIN_IDS[0] if ADMIN_IDS else 0
+
+if not ADMIN_IDS:
+    logger.error("КРИТИЧНА ПОМИЛКА: ADMIN_IDS або ADMIN_ID не налаштовано в .env файлі!")
+    logger.error("Додайте ADMIN_IDS=123456789,987654321 або ADMIN_ID=123456789 в .env файл")
 CHANNEL_ID = os.getenv('CHANNEL_ID', '')  # Застаріло - тепер використовується EVENTS_GROUP_ID
 EVENTS_GROUP_ID = os.getenv('EVENTS_GROUP_ID', '')  # Група для публікації подій
 if EVENTS_GROUP_ID and EVENTS_GROUP_ID.lstrip('-').isdigit():
@@ -125,7 +137,20 @@ APPLICATION_STATUS_EMOJI = {
 
 def is_admin(user_id: int) -> bool:
     """Перевірка чи користувач є адміністратором"""
-    return user_id == ADMIN_ID
+    return user_id in ADMIN_IDS
+
+
+async def send_message_to_all_admins(context: ContextTypes.DEFAULT_TYPE, text: str, **kwargs):
+    """Відправити повідомлення всім адміністраторам"""
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=text,
+                **kwargs
+            )
+        except Exception as err:
+            logger.error(f"Не вдалося надіслати повідомлення адміністратору {admin_id}: {err}")
 
 
 def format_date(date_str: str) -> str:
@@ -243,7 +268,8 @@ async def answer_callback_query(query, *args, **kwargs):
 
 
 def should_auto_delete_admin_message(chat_id: int) -> bool:
-    return chat_id == ADMIN_ID
+    """Перевірка чи повідомлення має автоматично видалятись (для адмінських чатів)"""
+    return chat_id in ADMIN_IDS
 
 
 def schedule_admin_message_cleanup(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
@@ -1651,7 +1677,7 @@ async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_
     # Оновити повідомлення в групі заявок
     await refresh_group_application_message(context, app_id)
 
-    # Відправити повідомлення адміністратору
+    # Відправити повідомлення всім адміністраторам
     if event:
         status_text = "основний кандидат" if was_primary else "кандидат"
         admin_message = (
@@ -1663,13 +1689,7 @@ async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_
             f"Дата: {format_date(event['date'])}\n"
             f"Час: {event['time']}"
         )
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=admin_message
-            )
-        except Exception as err:
-            logger.error(f"Не вдалося надіслати повідомлення адміністратору: {err}")
+        await send_message_to_all_admins(context, admin_message)
 
     await answer_callback_query(query, "Заявку скасовано", show_alert=True)
 
