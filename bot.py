@@ -1727,8 +1727,9 @@ async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_
     if event:
         await update_day_summary(context, event['date'])
 
-    # Оновити повідомлення в групі заявок
-    await refresh_group_application_message(context, app_id)
+    # Оновити повідомлення в групі заявок або одиночне
+    if not await refresh_group_application_message(context, app_id):
+        await refresh_single_application_message(context, app_id)
 
     # Відправити повідомлення всім адміністраторам
     if event:
@@ -3293,7 +3294,7 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
         f"Телефон: {app['phone']}\n"
         f"ID користувача: {app['user_id']}\n\n"
         f"Обрана процедура:\n"
-        f"1. №{application_id} — {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
+        f"1. №{application_id} {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
     )
 
     keyboard = build_single_application_keyboard(app, event)
@@ -3370,7 +3371,7 @@ def build_group_application_text(applications: list, candidate: dict) -> str:
         status_icon = format_application_status(item['status'], item.get('is_primary', False))
         photo_note = " (фото обов'язково)" if event.get('needs_photo') else ""
         lines.append(
-            f"{idx}. №{app_id} — {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
+            f"{idx}. №{app_id} {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
         )
 
     return "\n".join(lines)
@@ -3886,6 +3887,64 @@ async def refresh_group_application_message(
     return True
 
 
+async def refresh_single_application_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    application_id: int
+) -> bool:
+    """Оновити повідомлення одиночної заявки (текст і клавіатуру)"""
+    app = db.get_application_with_event(application_id)
+    if not app or not app.get('group_message_id'):
+        return False
+
+    channel_id = context.bot_data.get('applications_channel_id', APPLICATIONS_CHANNEL_ID)
+    if isinstance(channel_id, str):
+        try:
+            channel_id = int(channel_id)
+        except ValueError:
+            channel_id = int(APPLICATIONS_CHANNEL_ID)
+
+    event = db.get_event(app['event_id'])
+    if not event:
+        return False
+
+    # Формуємо оновлений текст
+    status_icon = format_application_status(app['status'], app.get('is_primary', False))
+    message_text = (
+        f"Нова заявка від {app['full_name']}\n"
+        f"Телефон: {app['phone']}\n"
+        f"ID користувача: {app['user_id']}\n\n"
+        f"Обрана процедура:\n"
+        f"1. №{application_id} {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
+    )
+
+    keyboard = build_single_application_keyboard(app, event)
+
+    try:
+        # Перевіряємо чи повідомлення є фото чи текст
+        try:
+            # Спробуємо оновити як текст
+            await context.bot.edit_message_text(
+                chat_id=channel_id,
+                message_id=app['group_message_id'],
+                text=message_text,
+                reply_markup=keyboard
+            )
+        except BadRequest as e:
+            # Якщо це фото, оновлюємо caption
+            if "message to edit not found" not in str(e).lower():
+                await context.bot.edit_message_caption(
+                    chat_id=channel_id,
+                    message_id=app['group_message_id'],
+                    caption=message_text,
+                    reply_markup=keyboard
+                )
+    except Exception as err:
+        logger.debug(f"Не вдалося оновити повідомлення одиночної заявки: {err}")
+        return False
+
+    return True
+
+
 # ==================== УПРАВЛІННЯ ЗАЯВКАМИ ====================
 
 async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3909,15 +3968,19 @@ async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     app = db.get_application(application_id)
 
+    # Оновлюємо групове повідомлення або одиночне
     if await refresh_group_application_message(context, application_id):
         return
 
-    if event:
-        await query.edit_message_reply_markup(
-            reply_markup=build_single_application_keyboard(app, event)
-        )
-    else:
-        await query.edit_message_reply_markup(reply_markup=None)
+    # Якщо це не групова заявка, оновлюємо одиночну заявку
+    if not await refresh_single_application_message(context, application_id):
+        # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
+        if event:
+            await query.edit_message_reply_markup(
+                reply_markup=build_single_application_keyboard(app, event)
+            )
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
 
 
 async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3984,17 +4047,20 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if event:
         await update_day_summary(context, event['date'])
 
-    # Оновлюємо повідомлення в групі
+    # Оновлюємо повідомлення в групі або одиночне
     if await refresh_group_application_message(context, application_id):
         return
 
+    # Якщо це не групова заявка, оновлюємо одиночну заявку
     refreshed = db.get_application(application_id)
-    if event:
-        await query.edit_message_reply_markup(
-            reply_markup=build_single_application_keyboard(refreshed, event)
-        )
-    else:
-        await query.edit_message_reply_markup(reply_markup=None)
+    if not await refresh_single_application_message(context, application_id):
+        # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
+        if event:
+            await query.edit_message_reply_markup(
+                reply_markup=build_single_application_keyboard(refreshed, event)
+            )
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
 
 
 async def set_primary_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4020,12 +4086,15 @@ async def set_primary_application(update: Update, context: ContextTypes.DEFAULT_
         await send_admin_message_from_query(query, context, "Не вдалося надіслати інструкцію кандидату")
 
     if not result['group_updated']:
-        try:
-            await query.edit_message_reply_markup(
-                reply_markup=build_single_application_keyboard(result['app'], result['event'])
-            )
-        except Exception as err:
-            logger.debug(f"Не вдалося оновити клавіатуру після призначення основного кандидата: {err}")
+        # Якщо це не групова заявка, оновлюємо одиночну заявку
+        if not await refresh_single_application_message(context, application_id):
+            # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
+            try:
+                await query.edit_message_reply_markup(
+                    reply_markup=build_single_application_keyboard(result['app'], result['event'])
+                )
+            except Exception as err:
+                logger.debug(f"Не вдалося оновити клавіатуру після призначення основного кандидата: {err}")
 
 
 async def confirm_reject_primary(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4077,18 +4146,20 @@ async def confirm_reject_primary(update: Update, context: ContextTypes.DEFAULT_T
         "✅ Основного кандидата відхилено."
     )
 
-    # Оновлюємо повідомлення в групі
+    # Оновлюємо повідомлення в групі або одиночне
     if await refresh_group_application_message(context, application_id):
         return
 
-    # Якщо групове повідомлення не оновлено, оновлюємо клавіатуру поточного повідомлення
+    # Якщо це не групова заявка, оновлюємо одиночну заявку
     refreshed = db.get_application(application_id)
-    if event:
-        await query.edit_message_reply_markup(
-            reply_markup=build_single_application_keyboard(refreshed, event)
-        )
-    else:
-        await query.edit_message_reply_markup(reply_markup=None)
+    if not await refresh_single_application_message(context, application_id):
+        # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
+        if event:
+            await query.edit_message_reply_markup(
+                reply_markup=build_single_application_keyboard(refreshed, event)
+            )
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
 
 
 async def cancel_reject_primary(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4218,15 +4289,18 @@ async def _finalize_application_cancellation(
         await send_admin_message_from_query(query, context, "Заявку скасовано. Резервних кандидатів немає.")
 
     if not group_updated:
+        # Якщо це не групова заявка, оновлюємо одиночну заявку
         refreshed_app = db.get_application(application_id)
         refreshed_event = db.get_event(app['event_id'])
-        if refreshed_app and refreshed_event:
-            try:
-                await query.edit_message_reply_markup(
-                    reply_markup=build_single_application_keyboard(refreshed_app, refreshed_event)
-                )
-            except Exception as err:
-                logger.debug(f"Не вдалося оновити клавіатуру після скасування заявки: {err}")
+        if not await refresh_single_application_message(context, application_id):
+            # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
+            if refreshed_app and refreshed_event:
+                try:
+                    await query.edit_message_reply_markup(
+                        reply_markup=build_single_application_keyboard(refreshed_app, refreshed_event)
+                    )
+                except Exception as err:
+                    logger.debug(f"Не вдалося оновити клавіатуру після скасування заявки: {err}")
 
 
 async def cancel_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4301,16 +4375,19 @@ async def cancel_primary_back(update: Update, context: ContextTypes.DEFAULT_TYPE
         await answer_callback_query(query, "Заявка не знайдена", show_alert=True)
         return
 
-    refreshed = await refresh_group_application_message(context, application_id)
-    if not refreshed:
-        refreshed_event = db.get_event(app['event_id'])
-        if refreshed_event:
-            try:
-                await query.edit_message_reply_markup(
-                    reply_markup=build_single_application_keyboard(app, refreshed_event)
-                )
-            except Exception as err:
-                logger.debug(f"Не вдалося відновити клавіатуру після скасування підтвердження: {err}")
+    # Оновлюємо групове або одиночне повідомлення
+    if not await refresh_group_application_message(context, application_id):
+        # Якщо це не групова заявка, оновлюємо одиночну заявку
+        if not await refresh_single_application_message(context, application_id):
+            # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
+            refreshed_event = db.get_event(app['event_id'])
+            if refreshed_event:
+                try:
+                    await query.edit_message_reply_markup(
+                        reply_markup=build_single_application_keyboard(app, refreshed_event)
+                    )
+                except Exception as err:
+                    logger.debug(f"Не вдалося відновити клавіатуру після скасування підтвердження: {err}")
 
     await answer_callback_query(query, "Скасування відмінено")
 
