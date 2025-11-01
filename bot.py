@@ -19,6 +19,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     ConversationHandler,
+    ChatMemberHandler,
     ContextTypes,
     filters,
     PicklePersistence,
@@ -77,14 +78,20 @@ db = Database()
 
 # Отримання конфігурації з .env
 ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
-CHANNEL_ID = os.getenv('CHANNEL_ID', '')
+CHANNEL_ID = os.getenv('CHANNEL_ID', '')  # Застаріло - тепер використовується EVENTS_GROUP_ID
+EVENTS_GROUP_ID = os.getenv('EVENTS_GROUP_ID', '')  # Група для публікації подій
+if EVENTS_GROUP_ID and EVENTS_GROUP_ID.lstrip('-').isdigit():
+    EVENTS_GROUP_ID = int(EVENTS_GROUP_ID)
+elif not EVENTS_GROUP_ID and CHANNEL_ID:
+    # Fallback на CHANNEL_ID для зворотної сумісності
+    EVENTS_GROUP_ID = int(CHANNEL_ID) if CHANNEL_ID.lstrip('-').isdigit() else CHANNEL_ID
 GROUP_ID = os.getenv('GROUP_ID', '')
 if GROUP_ID and GROUP_ID.lstrip('-').isdigit():
     GROUP_ID = int(GROUP_ID)
 CHANNEL_LINK = os.getenv('CHANNEL_LINK', '')
 APPLICATIONS_CHANNEL_ID = os.getenv('APPLICATIONS_CHANNEL_ID')
 if not APPLICATIONS_CHANNEL_ID:
-    APPLICATIONS_CHANNEL_ID = CHANNEL_ID or GROUP_ID
+    APPLICATIONS_CHANNEL_ID = GROUP_ID
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
@@ -1424,15 +1431,15 @@ async def confirm_cancel_event(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             logger.error(f"Не вдалося надіслати повідомлення користувачу {app['user_id']}: {e}")
 
-    # Видалити повідомлення з каналу, якщо є message_id
+    # Видалити повідомлення з групи подій, якщо є message_id
     if event.get('message_id'):
         try:
             await context.bot.delete_message(
-                chat_id=CHANNEL_ID,
+                chat_id=EVENTS_GROUP_ID,
                 message_id=event['message_id']
             )
         except Exception as e:
-            logger.error(f"Не вдалося видалити повідомлення з каналу: {e}")
+            logger.error(f"Не вдалося видалити повідомлення з групи подій: {e}")
 
     await query.edit_message_text(
         f"Захід '{event['procedure_type']}' {format_date(event['date'])} о {event['time']} успішно скасовано.\n\n"
@@ -1470,13 +1477,15 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
         status_emoji = {
             'pending': '⏳',
             'approved': '✅',
+            'primary': '🌟',
             'rejected': '❌',
             'cancelled': '🚫'
         }.get(app['status'], '❓')
 
         status_text = {
             'pending': 'Очікує розгляду',
-            'approved': 'Схвалено',
+            'approved': 'Схвалено (резерв)',
+            'primary': 'Ви основний кандидат',
             'rejected': 'Відхилено',
             'cancelled': 'Скасовано'
         }.get(app['status'], 'Невідомо')
@@ -1485,16 +1494,10 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
 
         message += f"{status_emoji} {app['procedure_type']}\n"
         message += f"📅 {format_date(app['date'])} о {app['time']}\n"
-        message += f"Статус: {status_text}{event_status}\n"
+        message += f"Статус: {status_text}{event_status}\n\n"
 
-        # Якщо заявка схвалена і є основною - показати це
-        if app['status'] == 'approved' and app.get('is_primary'):
-            message += "⭐ Основний кандидат\n"
-
-        message += "\n"
-
-        # Додати кнопку скасування тільки для активних заявок
-        if app['status'] == 'pending' and app['event_status'] == 'published':
+        # Додати кнопку скасування тільки для активних заявок (pending, approved, primary)
+        if app['status'] in ['pending', 'approved', 'primary'] and app['event_status'] == 'published':
             keyboard.append([
                 InlineKeyboardButton(
                     f"❌ Скасувати заявку на {app['procedure_type'][:20]}",
@@ -1556,13 +1559,15 @@ async def handle_user_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
             status_emoji = {
                 'pending': '⏳',
                 'approved': '✅',
+                'primary': '🌟',
                 'rejected': '❌',
                 'cancelled': '🚫'
             }.get(app['status'], '❓')
 
             status_text = {
                 'pending': 'Очікує розгляду',
-                'approved': 'Схвалено',
+                'approved': 'Схвалено (резерв)',
+                'primary': 'Ви основний кандидат',
                 'rejected': 'Відхилено',
                 'cancelled': 'Скасовано'
             }.get(app['status'], 'Невідомо')
@@ -1571,16 +1576,10 @@ async def handle_user_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
 
             message += f"{status_emoji} {app['procedure_type']}\n"
             message += f"📅 {format_date(app['date'])} о {app['time']}\n"
-            message += f"Статус: {status_text}{event_status}\n"
+            message += f"Статус: {status_text}{event_status}\n\n"
 
-            # Якщо заявка схвалена і є основною - показати це
-            if app['status'] == 'approved' and app.get('is_primary'):
-                message += "⭐ Основний кандидат\n"
-
-            message += "\n"
-
-            # Додати кнопку скасування тільки для активних заявок
-            if app['status'] == 'pending' and app['event_status'] == 'published':
+            # Додати кнопку скасування тільки для активних заявок (pending, approved, primary)
+            if app['status'] in ['pending', 'approved', 'primary'] and app['event_status'] == 'published':
                 keyboard.append([
                     InlineKeyboardButton(
                         f"❌ Скасувати заявку на {app['procedure_type'][:20]}",
@@ -1622,8 +1621,42 @@ async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_
         await answer_callback_query(query, "Помилка: заявка не знайдена", show_alert=True)
         return
 
+    # Отримати інформацію про подію
+    event = db.get_event(app['event_id'])
+
+    # Зберегти статус для повідомлення
+    was_primary = app['status'] == 'primary'
+
     # Оновити статус заявки
     db.update_application_status(app_id, 'cancelled')
+    db.recalculate_application_positions(app['event_id'])
+
+    # Оновити денне підсумок
+    if event:
+        await update_day_summary(context, event['date'])
+
+    # Оновити повідомлення в групі заявок
+    await refresh_group_application_message(context, app_id)
+
+    # Відправити повідомлення адміністратору
+    if event:
+        status_text = "основний кандидат" if was_primary else "кандидат"
+        admin_message = (
+            f"⚠️ Кандидат скасував свою заявку\n\n"
+            f"👤 {app['full_name']}\n"
+            f"📞 {app['phone']}\n"
+            f"Статус був: {status_text}\n\n"
+            f"Процедура: {event['procedure_type']}\n"
+            f"Дата: {format_date(event['date'])}\n"
+            f"Час: {event['time']}"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_message
+            )
+        except Exception as err:
+            logger.error(f"Не вдалося надіслати повідомлення адміністратору: {err}")
 
     await answer_callback_query(query, "Заявку скасовано", show_alert=True)
 
@@ -2258,7 +2291,7 @@ async def publish_day_schedule_to_channel(
     bot_username = (await context.bot.get_me()).username
 
     logger.debug(
-        "Публікація дня до каналу: date=%s, events=%s",
+        "Публікація дня до групи: date=%s, events=%s",
         date,
         [(event_id, item['time'], item['procedure']) for event_id, item in created_events]
     )
@@ -2303,15 +2336,15 @@ async def publish_day_schedule_to_channel(
     message_text = "\n".join(header + event_lines)
 
     message = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
+        chat_id=EVENTS_GROUP_ID,
         text=message_text,
         reply_markup=InlineKeyboardMarkup(button_rows),
         parse_mode=ParseMode.HTML
     )
 
     logger.info(
-        "Повідомлення в канал надіслано: channel=%s, message_id=%s",
-        CHANNEL_ID,
+        "Повідомлення в групу надіслано: group=%s, message_id=%s",
+        EVENTS_GROUP_ID,
         getattr(message, "message_id", None)
     )
 
@@ -3120,12 +3153,6 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for event_id, event_date in events_for_update.items():
             await update_day_summary(context, event_date)
 
-        # Показати меню користувача
-        await send_admin_message_from_query(query, context, 
-            "Оберіть дію:",
-            reply_markup=get_user_keyboard()
-        )
-
     except Exception as e:
         logger.error(f"Помилка подачі заявки: {e}", exc_info=True)
         await send_admin_message_from_query(query, context, "Помилка при подачі заявки")
@@ -3309,10 +3336,10 @@ def format_day_count_text(count: int) -> str:
     if count <= 0:
         return ""
     if count == 1:
-        return " (1 заявка цього дня)"
+        return " (1 заявка на цей день)"
     if 2 <= count <= 4:
-        return f" ({count} заявки цього дня)"
-    return f" ({count} заявок цього дня)"
+        return f" ({count} заявки на цей день)"
+    return f" ({count} заявок на цей день)"
 
 
 def build_message_link(chat_identifier, message_id: Optional[int]) -> Optional[str]:
@@ -3805,8 +3832,7 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"📞 {html.escape(application['phone'])}\n"
                 f"📅 {format_date(event['date'])}\n"
                 f"🕐 {event['time']} - {event['procedure_type']}\n\n"
-                f"Кандидату вже було відправлено інструкції.\n"
-                f"Після відхилення автоматично обереться наступний кандидат з резерву.\n\n"
+                f"Кандидату вже було відправлено інструкції.\n\n"
                 f"Продовжити?"
             )
             keyboard = [
@@ -3815,11 +3841,25 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     InlineKeyboardButton("❌ Скасувати", callback_data=f"cancel_reject_primary_{application_id}")
                 ]
             ]
-            await query.edit_message_text(
-                text=warning_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.HTML
-            )
+            # Перевіряємо тип повідомлення (фото чи текст)
+            try:
+                if query.message.photo:
+                    # Якщо це фото, редагуємо caption
+                    await query.edit_message_caption(
+                        caption=warning_text,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    # Якщо це текст, редагуємо текст
+                    await query.edit_message_text(
+                        text=warning_text,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode=ParseMode.HTML
+                    )
+            except Exception as err:
+                logger.error(f"Помилка при показі попередження про відхилення primary: {err}")
+                await send_admin_message_from_query(query, context, warning_text)
         return
 
     # Якщо не primary - відхиляємо як зазвичай
@@ -3829,6 +3869,7 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if event:
         await update_day_summary(context, event['date'])
 
+    # Оновлюємо повідомлення в групі
     if await refresh_group_application_message(context, application_id):
         return
 
@@ -3896,25 +3937,30 @@ async def confirm_reject_primary(update: Update, context: ContextTypes.DEFAULT_T
     if event:
         await update_day_summary(context, event['date'])
 
-    # Автоматично просуваємо наступного кандидата з резерву
-    promoted = await promote_next_candidate(context, application['event_id'])
+    # Відправляємо повідомлення кандидату про відхилення
+    if event:
+        rejection_text = (
+            "Вибачте, але вашу раніше підтверджену заявку було відхилено. "
+            "Просимо вибачення за незручності.\n\n"
+            f"Процедура: {event['procedure_type']}\n"
+            f"Дата: {format_date(event['date'])}\n"
+            f"Час: {event['time']}"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=application['user_id'],
+                text=rejection_text,
+                reply_markup=get_user_keyboard()
+            )
+        except Exception as err:
+            logger.debug(f"Не вдалося повідомити кандидата про відхилення: {err}")
 
-    if promoted:
-        await send_admin_message_from_query(
-            query,
-            context,
-            f"✅ Основного кандидата відхилено.\n"
-            f"🔄 Наступний кандидат з резерву автоматично обраний основним:\n"
-            f"👤 {promoted['full_name']}\n"
-            f"📞 {promoted['phone']}"
-        )
-    else:
-        await send_admin_message_from_query(
-            query,
-            context,
-            "✅ Основного кандидата відхилено.\n"
-            "⚠️ Немає кандидатів у резерві для автоматичного просування."
-        )
+    # Повідомляємо адміністратора про успішне відхилення
+    await send_admin_message_from_query(
+        query,
+        context,
+        "✅ Основного кандидата відхилено."
+    )
 
     # Оновлюємо повідомлення в групі
     if await refresh_group_application_message(context, application_id):
@@ -3961,11 +4007,26 @@ async def cancel_reject_primary(update: Update, context: ContextTypes.DEFAULT_TY
     )
     keyboard = build_single_application_keyboard(application, event)
 
-    await query.edit_message_text(
-        text=text,
-        reply_markup=keyboard,
-        parse_mode=ParseMode.HTML
-    )
+    # Перевіряємо тип повідомлення (фото чи текст)
+    try:
+        if query.message.photo:
+            # Якщо це фото, редагуємо caption
+            await query.edit_message_caption(
+                caption=text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            # Якщо це текст, редагуємо текст
+            await query.edit_message_text(
+                text=text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML
+            )
+    except Exception as err:
+        logger.error(f"Помилка при відновленні відображення заявки: {err}")
+        # Fallback - оновлюємо тільки клавіатуру
+        await query.edit_message_reply_markup(reply_markup=keyboard)
 
 
 async def _finalize_application_cancellation(
@@ -3985,11 +4046,28 @@ async def _finalize_application_cancellation(
     if event:
         await update_day_summary(context, event['date'])
 
-    message_text = (
-        "Вибачте, але вашу заявку було скасовано. Просимо вибачення за незручності."
-        if apology else
-        "Ваша заявка позначена як скасована."
-    )
+    # Формуємо повідомлення з деталями процедури
+    if apology and event:
+        message_text = (
+            "Вибачте, але вашу раніше підтверджену заявку було скасовано. "
+            "Просимо вибачення за незручності.\n\n"
+            f"Процедура: {event['procedure_type']}\n"
+            f"Дата: {format_date(event['date'])}\n"
+            f"Час: {event['time']}"
+        )
+    elif event:
+        message_text = (
+            "Ваша заявка позначена як скасована.\n\n"
+            f"Процедура: {event['procedure_type']}\n"
+            f"Дата: {format_date(event['date'])}\n"
+            f"Час: {event['time']}"
+        )
+    else:
+        message_text = (
+            "Вибачте, але вашу заявку було скасовано. Просимо вибачення за незручності."
+            if apology else
+            "Ваша заявка позначена як скасована."
+        )
 
     try:
         await context.bot.send_message(
@@ -4243,6 +4321,35 @@ async def forward_candidate_message(update: Update, context: ContextTypes.DEFAUL
 
 # ==================== MAIN ====================
 
+async def on_bot_added_to_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка події додавання бота до чату (групи/каналу)"""
+    my_chat_member = update.my_chat_member
+    if not my_chat_member:
+        return
+
+    old_status = my_chat_member.old_chat_member.status
+    new_status = my_chat_member.new_chat_member.status
+    chat = my_chat_member.chat
+
+    # Перевірка чи бот був доданий до чату
+    if old_status in ['left', 'kicked'] and new_status in ['member', 'administrator']:
+        logger.info(f"Бот додано до чату: {chat.title} (ID: {chat.id}, тип: {chat.type})")
+
+        # Відправити привітальне повідомлення в групу
+        try:
+            welcome_text = (
+                "Привіт! Я бот для запису на косметологічні процедури.\n\n"
+                "Тепер я готовий обробляти заявки в цій групі."
+            )
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text=welcome_text
+            )
+            logger.info(f"Відправлено привітальне повідомлення в чат {chat.id}")
+        except Exception as e:
+            logger.error(f"Помилка при відправці привітального повідомлення: {e}")
+
+
 def main():
     """Запуск бота"""
     token = os.getenv('BOT_TOKEN')
@@ -4433,6 +4540,10 @@ def main():
 
     # Додати обробники (ConversationHandlers мають вищий пріоритет - group 0)
     application.add_handler(TypeHandler(Update, log_update), group=-1)
+
+    # Обробник додавання бота до чату
+    application.add_handler(ChatMemberHandler(on_bot_added_to_chat, ChatMemberHandler.MY_CHAT_MEMBER))
+
     application.add_handler(create_event_handler, group=0)
     application.add_handler(apply_event_handler, group=0)
     application.add_handler(block_user_handler, group=0)
