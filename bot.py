@@ -1485,7 +1485,7 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
         status_text = {
             'pending': 'Очікує розгляду',
             'approved': 'Схвалено (резерв)',
-            'primary': 'Ви основний кандидат',
+            'primary': 'Вашу заявку погоджено',
             'rejected': 'Відхилено',
             'cancelled': 'Скасовано'
         }.get(app['status'], 'Невідомо')
@@ -1645,7 +1645,7 @@ async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_
             f"⚠️ Кандидат скасував свою заявку\n\n"
             f"👤 {app['full_name']}\n"
             f"📞 {app['phone']}\n"
-            f"Статус був: {status_text}\n\n"
+            f"Минулий статус: {status_text}\n\n"
             f"Процедура: {event['procedure_type']}\n"
             f"Дата: {format_date(event['date'])}\n"
             f"Час: {event['time']}"
@@ -3566,7 +3566,7 @@ async def send_primary_instruction(context: ContextTypes.DEFAULT_TYPE, app: dict
         f"Дата: {format_date(event['date'])}\n"
         f"Час: {event['time']}\n\n"
         f"Інструкції:\n"
-        f"• Будь ласка, прийдіть за 10 хвилин до початку\n"
+        f"• Будь ласка, прийдіть за 30 хвилин до початку\n"
         f"• Майте при собі документ, що підтверджує особу\n"
         f"• У разі неможливості прийти, повідомте нас заздалегідь\n\n"
         f"До зустрічі!"
@@ -4285,7 +4285,7 @@ async def forward_candidate_message(update: Update, context: ContextTypes.DEFAUL
 
     # Ігнорувати команди з меню користувача та адміна
     menu_commands = ["📋 Мої заявки", "ℹ️ Інформація", "🆕 Новий захід", "📋 Заходи", "⚙️"]
-    if update.message.text in menu_commands:
+    if update.message.text and update.message.text in menu_commands:
         return
 
     # Ігнорувати якщо це приватний чат (conversation активний)
@@ -4315,6 +4315,9 @@ async def forward_candidate_message(update: Update, context: ContextTypes.DEFAUL
             text=message_text,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+    except ChatMigrated as e:
+        logger.warning(f"Група мігрувала в супергрупу. Новий ID: {e.new_chat_id}")
+        logger.warning(f"Оновіть GROUP_ID в .env файлі на: {e.new_chat_id}")
     except Exception as e:
         logger.error(f"Помилка пересилання повідомлення: {e}")
 
