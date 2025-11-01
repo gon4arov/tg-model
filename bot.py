@@ -7,6 +7,9 @@ import sys
 import asyncio
 import html
 import json
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from collections import Counter
 from typing import Optional, Dict, List
 from datetime import datetime
@@ -118,6 +121,18 @@ APPLICATIONS_CHANNEL_ID = os.getenv('APPLICATIONS_CHANNEL_ID')
 if not APPLICATIONS_CHANNEL_ID:
     APPLICATIONS_CHANNEL_ID = GROUP_ID
 
+# Email конфігурація для повідомлень про заявки
+EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_USER = os.getenv('EMAIL_USER', '')
+EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
+EMAIL_TO = os.getenv('EMAIL_TO', '')  # Email(и) для отримання повідомлень, через кому
+
+if EMAIL_ENABLED and not all([EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO]):
+    logger.warning("EMAIL_ENABLED=true, але не всі EMAIL змінні налаштовані. Email-повідомлення будуть вимкнені.")
+    EMAIL_ENABLED = False
+
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
 
@@ -151,6 +166,44 @@ async def send_message_to_all_admins(context: ContextTypes.DEFAULT_TYPE, text: s
             )
         except Exception as err:
             logger.error(f"Не вдалося надіслати повідомлення адміністратору {admin_id}: {err}")
+
+
+async def send_email_notification(subject: str, body: str):
+    """
+    Відправити email-повідомлення адміністраторам
+
+    Args:
+        subject: Тема листа
+        body: Текст листа (підтримує HTML)
+    """
+    if not EMAIL_ENABLED:
+        return
+
+    try:
+        # Створюємо повідомлення
+        msg = MIMEMultipart('alternative')
+        msg['From'] = EMAIL_USER
+        msg['To'] = EMAIL_TO
+        msg['Subject'] = subject
+
+        # Додаємо текстову та HTML версію
+        text_part = MIMEText(body, 'plain', 'utf-8')
+        html_part = MIMEText(body.replace('\n', '<br>'), 'html', 'utf-8')
+        msg.attach(text_part)
+        msg.attach(html_part)
+
+        # Відправляємо через Gmail SMTP
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+
+            # Відправляємо на всі адреси (якщо їх кілька через кому)
+            recipients = [email.strip() for email in EMAIL_TO.split(',')]
+            server.sendmail(EMAIL_USER, recipients, msg.as_string())
+
+        logger.info(f"Email-повідомлення відправлено: {subject}")
+    except Exception as e:
+        logger.error(f"Помилка при відправці email: {e}")
 
 
 def format_date(date_str: str) -> str:
@@ -3185,6 +3238,32 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         for event_id, event_date in events_for_update.items():
             await update_day_summary(context, event_date)
+
+        # Відправка email-повідомлення адміністраторам
+        if EMAIL_ENABLED and valid_events:
+            email_subject = f"Нова заявка від {app['full_name']}"
+            email_lines = [
+                f"Отримано нову заявку!",
+                "",
+                f"👤 Ім'я: {app['full_name']}",
+                f"📞 Телефон: {app['phone']}",
+                f"🆔 User ID: {update.effective_user.id}",
+                ""
+            ]
+
+            if len(valid_events) == 1:
+                event = valid_events[0]
+                email_lines.extend([
+                    f"📋 Процедура: {event['procedure_type']}",
+                    f"📅 Дата: {format_date(event['date'])}",
+                    f"🕐 Час: {event['time']}"
+                ])
+            else:
+                email_lines.append("Процедури:")
+                for event in valid_events:
+                    email_lines.append(f"  • {event['procedure_type']} — {format_date(event['date'])} {event['time']}")
+
+            await send_email_notification(email_subject, "\n".join(email_lines))
 
     except Exception as e:
         logger.error(f"Помилка подачі заявки: {e}", exc_info=True)
