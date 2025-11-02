@@ -133,6 +133,11 @@ if EMAIL_ENABLED and not all([EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO]):
     logger.warning("EMAIL_ENABLED=true, але не всі EMAIL змінні налаштовані. Email-повідомлення будуть вимкнені.")
     EMAIL_ENABLED = False
 
+# Пароль для очистки БД (змінюється через .env для безпеки)
+DB_CLEAR_PASSWORD = os.getenv('DB_CLEAR_PASSWORD', '')
+if not DB_CLEAR_PASSWORD:
+    logger.warning("DB_CLEAR_PASSWORD не налаштовано в .env. Очистка БД буде недоступна.")
+
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
 
@@ -1062,7 +1067,17 @@ async def clear_db_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Не вдалося видалити повідомлення з паролем: {e}")
 
-    if password == "medicalaser":
+    if not DB_CLEAR_PASSWORD:
+        keyboard = [[InlineKeyboardButton("◀️ Назад в меню", callback_data="back_to_menu")]]
+        await send_admin_message_from_update(
+            update,
+            context,
+            "❌ Очистка БД недоступна. DB_CLEAR_PASSWORD не налаштовано в .env",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
+
+    if password == DB_CLEAR_PASSWORD:
         try:
             dialog_message = await send_admin_message(
                 context,
