@@ -52,7 +52,11 @@ from constants import (
     BLOCK_USER_ID,
     ADD_PROCEDURE_TYPE_NAME,
     EDIT_PROCEDURE_TYPE_NAME,
-    CLEAR_DB_PASSWORD
+    CLEAR_DB_PASSWORD,
+    MAX_FULL_NAME_LENGTH,
+    MAX_COMMENT_LENGTH,
+    MAX_PROCEDURE_TYPE_NAME_LENGTH,
+    MAX_ACTIVE_APPLICATIONS_PER_USER
 )
 
 # Завантаження змінних середовища
@@ -1351,9 +1355,9 @@ async def add_procedure_type_name(update: Update, context: ContextTypes.DEFAULT_
 
     name = update.message.text.strip()
 
-    if not name or len(name) > 100:
-        error_msg = await send_admin_message_from_update(update, context, 
-            "❌ Назва має бути від 1 до 100 символів.\n\n"
+    if not name or len(name) > MAX_PROCEDURE_TYPE_NAME_LENGTH:
+        error_msg = await send_admin_message_from_update(update, context,
+            f"❌ Назва має бути від 1 до {MAX_PROCEDURE_TYPE_NAME_LENGTH} символів.\n\n"
             "Спробуйте ще раз:"
         )
         asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
@@ -1441,9 +1445,9 @@ async def edit_procedure_type_name(update: Update, context: ContextTypes.DEFAULT
         asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
         return ConversationHandler.END
 
-    if not name or len(name) > 100:
-        error_msg = await send_admin_message_from_update(update, context, 
-            "❌ Назва має бути від 1 до 100 символів.\n\n"
+    if not name or len(name) > MAX_PROCEDURE_TYPE_NAME_LENGTH:
+        error_msg = await send_admin_message_from_update(update, context,
+            f"❌ Назва має бути від 1 до {MAX_PROCEDURE_TYPE_NAME_LENGTH} символів.\n\n"
             "Спробуйте ще раз:"
         )
         asyncio.create_task(auto_delete_message(context, update.effective_chat.id, error_msg.message_id))
@@ -1726,6 +1730,13 @@ async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_
     app = db.get_application(app_id)
     if not app or app['user_id'] != user_id:
         await answer_callback_query(query, "Помилка: заявка не знайдена", show_alert=True)
+        return
+
+    # Перевірити чи заявка вже скасована
+    if app['status'] == 'cancelled':
+        await answer_callback_query(query, "Заявка вже скасована", show_alert=True)
+        # Оновити список заявок без змін статусу
+        await user_my_applications(update, context)
         return
 
     # Отримати інформацію про подію
@@ -2098,6 +2109,15 @@ async def skip_event_comment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def create_event_comment_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробити введений коментар"""
     text = (update.message.text or "").strip()
+
+    # Валідація довжини коментаря
+    if text and len(text) > MAX_COMMENT_LENGTH:
+        await send_admin_message_from_update(update, context,
+            f"❌ Коментар занадто довгий. Максимум {MAX_COMMENT_LENGTH} символів.\n\n"
+            "Введіть коментар заново або натисніть кнопку 'Пропустити':"
+        )
+        return CREATE_EVENT_COMMENT
+
     if text:
         context.user_data['event']['comment'] = text
     else:
@@ -2898,13 +2918,29 @@ async def apply_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка ПІБ"""
     # Перевірка наявності даних заявки (можуть бути втрачені при перезапуску бота)
     if 'application' not in context.user_data:
-        await send_admin_message_from_update(update, context, 
+        await send_admin_message_from_update(update, context,
             "⚠️ Дані заявки втрачено (можливо, бот було перезапущено).\n\n"
             "Будь ласка, почніть процес заново командою /start"
         )
         return ConversationHandler.END
 
-    context.user_data['application']['full_name'] = update.message.text
+    full_name = update.message.text.strip()
+
+    # Валідація довжини ПІБ
+    if len(full_name) > MAX_FULL_NAME_LENGTH:
+        await send_admin_message_from_update(update, context,
+            f"❌ ПІБ занадто довге. Максимум {MAX_FULL_NAME_LENGTH} символів.\n\n"
+            "Введіть ваше повне ім'я (Прізвище Ім'я По батькові):"
+        )
+        return APPLY_FULL_NAME
+
+    if len(full_name) < 3:
+        await send_admin_message_from_update(update, context,
+            "❌ ПІБ занадто коротке. Введіть коректне ПІБ (мінімум 3 символи):"
+        )
+        return APPLY_FULL_NAME
+
+    context.user_data['application']['full_name'] = full_name
     await send_admin_message_from_update(update, context, "ПІБ збережено")
 
     # Клавіатура з кнопкою для надсилання контакту
@@ -3021,10 +3057,11 @@ async def apply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photos = application.get('photos', [])
 
     if len(photos) >= MAX_APPLICATION_PHOTOS:
+        # Спочатку показуємо попередження
         if not application.get('photo_warning_sent'):
             await update.message.reply_text(
-                f"Можна надіслати не більше {MAX_APPLICATION_PHOTOS} фото. "
-                f"Перші {MAX_APPLICATION_PHOTOS} вже збережено, решту ігноруємо. "
+                f"⚠️ Можна надіслати не більше {MAX_APPLICATION_PHOTOS} фото.\n\n"
+                f"Перші {MAX_APPLICATION_PHOTOS} вже збережено, решту ігноруємо.\n\n"
                 "Натисніть «📤 Надіслати заявку» для підтвердження."
             )
             application['photo_warning_sent'] = True
@@ -3033,6 +3070,15 @@ async def apply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Перевищено ліміт фото: user=%s, total=%s",
                 update.effective_user.id if update.effective_user else None,
                 len(photos)
+            )
+
+            # А вже потім оновлюємо повідомлення з кнопками
+            await update_photo_prompt_message(
+                context,
+                application,
+                chat_id=update.effective_chat.id,
+                mode='summary',
+                reply_to_message_id=None  # Не прив'язуємо до фото-повідомлення
             )
         return APPLY_PHOTOS
 
@@ -3159,13 +3205,56 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
     app = context.user_data.get('application')
 
     if not app:
-        await send_admin_message_from_query(query, context, "Дані заявки втрачено. Будь ласка, почніть процес заново.")
+        # Видалити попереднє повідомлення та надіслати нове з клавіатурою
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Дані заявки втрачено. Будь ласка, почніть процес заново.",
+            reply_markup=get_user_keyboard()
+        )
+        return ConversationHandler.END
+
+    # Перевірка кількості активних заявок користувача
+    user_id = update.effective_user.id
+    active_count = db.count_user_active_applications(user_id)
+
+    if active_count >= MAX_ACTIVE_APPLICATIONS_PER_USER:
+        # Видалити попереднє повідомлення та надіслати нове з клавіатурою
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                f"⚠️ Ви маєте забагато активних заявок ({active_count}/{MAX_ACTIVE_APPLICATIONS_PER_USER}).\n\n"
+                "Дочекайтесь розгляду попередніх заявок перед тим, як подавати нові.\n\n"
+                "Активні заявки: ті, що мають статус 'Очікує', 'Резерв' або 'Основний'."
+            ),
+            reply_markup=get_user_keyboard()
+        )
+        context.user_data.clear()
         return ConversationHandler.END
 
     try:
         selected_event_ids = app.get('event_ids', [])
         if not selected_event_ids:
-            await send_admin_message_from_query(query, context, "Обрані процедури не знайдені. Спробуйте почати знову.")
+            # Видалити попереднє повідомлення та надіслати нове з клавіатурою
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Обрані процедури не знайдені. Спробуйте почати знову.",
+                reply_markup=get_user_keyboard()
+            )
             return ConversationHandler.END
 
         stored_events = {event['id']: event for event in app.get('events', [])}
@@ -3180,8 +3269,16 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
             valid_events.append(event)
 
         if not valid_events:
-            await query.edit_message_text(
-                "На жаль, жодна з обраних процедур вже не приймає заявки. Спробуйте обрати інші дати."
+            # Видалити попереднє повідомлення та надіслати нове з клавіатурою
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="На жаль, жодна з обраних процедур вже не приймає заявки. Спробуйте обрати інші дати.",
+                reply_markup=get_user_keyboard()
             )
             context.user_data.clear()
             return ConversationHandler.END
@@ -3233,7 +3330,17 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         lines.append("")
         lines.append("Очікуйте на розгляд адміністратором.")
 
-        await query.edit_message_text("\n".join(lines))
+        # Видалити попереднє повідомлення та надіслати нове з клавіатурою
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="\n".join(lines),
+            reply_markup=get_user_keyboard()
+        )
 
         # Опублікувати заявку/заявки в групу
         if application_results:
@@ -3283,7 +3390,18 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     except Exception as e:
         logger.error(f"Помилка подачі заявки: {e}", exc_info=True)
-        await send_admin_message_from_query(query, context, "Помилка при подачі заявки")
+
+        # Видалити попереднє повідомлення та надіслати нове з клавіатурою
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Помилка при подачі заявки. Спробуйте ще раз або зверніться до адміністратора.",
+            reply_markup=get_user_keyboard()
+        )
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -3309,7 +3427,7 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
         f"Телефон: {app['phone']}\n"
         f"ID користувача: {app['user_id']}\n\n"
         f"Обрана процедура:\n"
-        f"1. №{application_id} {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
+        f"1. (№{application_id}) {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
     )
 
     keyboard = build_single_application_keyboard(app, event)
@@ -3335,7 +3453,7 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
                 messages = await context.bot.send_media_group(chat_id=channel_id, media=media)
                 message = await context.bot.send_message(
                     chat_id=channel_id,
-                    text=f"Заявка №{application_id}",
+                    text=f"Заявка (№{application_id})",
                     reply_markup=keyboard
                 )
             except ChatMigrated as e:
@@ -3386,7 +3504,7 @@ def build_group_application_text(applications: list, candidate: dict) -> str:
         status_icon = format_application_status(item['status'], item.get('is_primary', False))
         photo_note = " (фото обов'язково)" if event.get('needs_photo') else ""
         lines.append(
-            f"{idx}. №{app_id} {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
+            f"{idx}. (№{app_id}) {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
         )
 
     return "\n".join(lines)
@@ -3508,7 +3626,9 @@ def format_status_counts(counter: Counter) -> str:
 
 def build_day_summary_text(context: ContextTypes.DEFAULT_TYPE, date: str) -> Optional[str]:
     """Сформувати підсумкове повідомлення по всіх процедурах дня"""
-    events = db.get_events_by_date(date)
+    all_events = db.get_events_by_date(date)
+    # Фільтруємо cancelled заходи
+    events = [e for e in all_events if e.get('status') != 'cancelled']
     if not events:
         return None
 
@@ -3791,19 +3911,23 @@ async def publish_group_application_to_channel(
         for app_id, event in application_results
     ]
 
+    # Формуємо список номерів заявок для підпису фото
+    app_numbers = ", ".join([f"№{app['id']}" for app in applications_data])
+    photo_caption = f"Фото до заявки від {candidate['full_name']}\nЗаявки: {app_numbers}"
+
     if photos:
         try:
             if len(photos) == 1:
                 await context.bot.send_photo(
                     chat_id=channel_id,
                     photo=photos[0],
-                    caption=f"Фото до заявки від {candidate['full_name']}"
+                    caption=photo_caption
                 )
             else:
                 media = [
                     InputMediaPhoto(
                         media=photo_id,
-                        caption=f"Фото до заявки від {candidate['full_name']}" if idx == 0 else ''
+                        caption=photo_caption if idx == 0 else ''
                     )
                     for idx, photo_id in enumerate(photos)
                 ]
@@ -3929,7 +4053,7 @@ async def refresh_single_application_message(
         f"Телефон: {app['phone']}\n"
         f"ID користувача: {app['user_id']}\n\n"
         f"Обрана процедура:\n"
-        f"1. №{application_id} {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
+        f"1. (№{application_id}) {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
     )
 
     keyboard = build_single_application_keyboard(app, event)
@@ -3944,20 +4068,37 @@ async def refresh_single_application_message(
                 text=message_text,
                 reply_markup=keyboard
             )
+            return True
         except BadRequest as e:
-            # Якщо це фото, оновлюємо caption
-            if "message to edit not found" not in str(e).lower():
+            error_msg = str(e).lower()
+
+            # Якщо повідомлення не знайдено - воно було видалено
+            if "message to edit not found" in error_msg or "message not found" in error_msg:
+                logger.debug(f"Повідомлення {app['group_message_id']} не знайдено (можливо видалено)")
+                return False
+
+            # Якщо повідомлення вже актуальне
+            if "message is not modified" in error_msg:
+                return True
+
+            # Інакше це може бути фото - спробуємо оновити caption
+            try:
                 await context.bot.edit_message_caption(
                     chat_id=channel_id,
                     message_id=app['group_message_id'],
                     caption=message_text,
                     reply_markup=keyboard
                 )
+                return True
+            except BadRequest as caption_err:
+                caption_error_msg = str(caption_err).lower()
+                if "message is not modified" in caption_error_msg:
+                    return True
+                logger.debug(f"Не вдалося оновити caption: {caption_err}")
+                return False
     except Exception as err:
         logger.debug(f"Не вдалося оновити повідомлення одиночної заявки: {err}")
         return False
-
-    return True
 
 
 # ==================== УПРАВЛІННЯ ЗАЯВКАМИ ====================
@@ -4200,7 +4341,7 @@ async def cancel_reject_primary(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Повертаємося до звичайного відображення заявки
     text = (
-        f"Заявка №{application_id}\n\n"
+        f"Заявка (№{application_id})\n\n"
         f"Процедура: {event['procedure_type']}\n"
         f"Дата: {format_date(event['date'])} {event['time']}\n\n"
         f"ПІБ: {application['full_name']}\n"
@@ -4339,6 +4480,11 @@ async def cancel_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         application_id,
         app.get('status')
     )
+
+    # Перевірити чи заявка вже скасована
+    if app.get('status') == 'cancelled':
+        await answer_callback_query(query, "Заявка вже скасована", show_alert=True)
+        return
 
     if app.get('status') == 'primary':
         confirm_keyboard = InlineKeyboardMarkup([
@@ -4644,7 +4790,8 @@ def main():
         fallbacks=[CallbackQueryHandler(cancel, pattern='^cancel$')],
         name="create_event_conversation",
         persistent=True,
-        allow_reentry=True
+        allow_reentry=True,
+        conversation_timeout=1800  # 30 хвилин
     )
 
     # Обробник подачі заявки
@@ -4685,7 +4832,8 @@ def main():
         fallbacks=[CallbackQueryHandler(cancel, pattern='^cancel$')],
         name="apply_event_conversation",
         persistent=True,
-        allow_reentry=True
+        allow_reentry=True,
+        conversation_timeout=1800  # 30 хвилин
     )
 
     # Обробник блокування користувача

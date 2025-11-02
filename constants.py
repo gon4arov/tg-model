@@ -35,6 +35,14 @@ BLOCK_USER_ID = 201
 # Стан для очистки БД
 CLEAR_DB_PASSWORD = 400
 
+# Обмеження довжини текстових полів
+MAX_FULL_NAME_LENGTH = 100
+MAX_COMMENT_LENGTH = 500
+MAX_PROCEDURE_TYPE_NAME_LENGTH = 100
+
+# Обмеження кількості активних заявок на користувача
+MAX_ACTIVE_APPLICATIONS_PER_USER = 10
+
 def generate_time_slots():
     """Генерація часових слотів від 9:00 до 17:00 з інтервалом 10 хвилин"""
     slots = []

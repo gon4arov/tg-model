@@ -91,6 +91,15 @@ class Database:
             )
         ''')
 
+        # Створення індексів для оптимізації запитів
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_applications_event_id ON applications(event_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_applications_user_id ON applications(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_applications_group_message_id ON applications(group_message_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_events_date ON events(date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_application_photos_application_id ON application_photos(application_id)')
+
         conn.commit()
         conn.close()
 
@@ -416,42 +425,75 @@ class Database:
         conn.close()
 
     def recalculate_application_positions(self, event_id: int) -> None:
-        """Перерахувати позиції заявок після змін статусів"""
-        applications = self.get_applications_by_event(event_id)
-        primary_id = None
-        reserve_ids: List[int] = []
-
-        for app in applications:
-            status = app['status']
-            if status == 'primary':
-                if primary_id is None:
-                    primary_id = app['id']
-                else:
-                    # Лишаємо лише одного основного кандидата
-                    self.set_application_status(app['id'], 'approved')
-                    reserve_ids.append(app['id'])
-            elif status == 'approved':
-                reserve_ids.append(app['id'])
-
-        position = 1
-        if primary_id:
-            self.update_application_position(primary_id, position)
-            position += 1
-
-        for reserve_id in reserve_ids:
-            self.update_application_position(reserve_id, position)
-            position += 1
-
-        # Скинути позицію для інших статусів
+        """Перерахувати позиції заявок після змін статусів з захистом від race condition"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE applications
-            SET position = 0
-            WHERE event_id = ? AND status NOT IN ('primary', 'approved')
-        ''', (event_id,))
-        conn.commit()
-        conn.close()
+
+        try:
+            # Використовуємо BEGIN IMMEDIATE для блокування на рівні БД
+            cursor.execute('BEGIN IMMEDIATE')
+
+            # Отримуємо заявки в межах транзакції
+            cursor.execute('''
+                SELECT id, status
+                FROM applications
+                WHERE event_id = ?
+                ORDER BY created_at ASC
+            ''', (event_id,))
+            applications = cursor.fetchall()
+
+            primary_id = None
+            reserve_ids: List[int] = []
+
+            for app in applications:
+                app_id = app[0]
+                status = app[1]
+
+                if status == 'primary':
+                    if primary_id is None:
+                        primary_id = app_id
+                    else:
+                        # Лишаємо лише одного основного кандидата
+                        cursor.execute('''
+                            UPDATE applications
+                            SET status = 'approved', is_primary = 0
+                            WHERE id = ?
+                        ''', (app_id,))
+                        reserve_ids.append(app_id)
+                elif status == 'approved':
+                    reserve_ids.append(app_id)
+
+            position = 1
+            if primary_id:
+                cursor.execute('''
+                    UPDATE applications
+                    SET position = ?
+                    WHERE id = ?
+                ''', (position, primary_id))
+                position += 1
+
+            for reserve_id in reserve_ids:
+                cursor.execute('''
+                    UPDATE applications
+                    SET position = ?
+                    WHERE id = ?
+                ''', (position, reserve_id))
+                position += 1
+
+            # Скинути позицію для інших статусів
+            cursor.execute('''
+                UPDATE applications
+                SET position = 0
+                WHERE event_id = ? AND status NOT IN ('primary', 'approved')
+            ''', (event_id,))
+
+            conn.commit()
+
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
 
     def get_user_applications_for_date(self, user_id: int, date: str) -> List[Dict]:
         """Отримати всі заявки користувача на конкретну дату"""
@@ -467,6 +509,18 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def count_user_active_applications(self, user_id: int) -> int:
+        """Підрахувати кількість активних заявок користувача (pending, approved, primary)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) FROM applications
+            WHERE user_id = ? AND status IN ('pending', 'approved', 'primary')
+        ''', (user_id,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
 
     # Методи для роботи з повідомленнями по днях
     def get_day_message_id(self, date: str) -> Optional[int]:
@@ -703,3 +757,42 @@ class Database:
 
         # Повернути початкові типи процедур
         self._init_procedure_types()
+
+    def archive_old_events(self, days_old: int = 180) -> int:
+        """Архівувати старі заходи (старше вказаної кількості днів)
+
+        Args:
+            days_old: Кількість днів (за замовчуванням 180 = 6 місяців)
+
+        Returns:
+            Кількість архівованих заходів
+        """
+        from datetime import datetime, timedelta
+        from constants import UKRAINE_TZ
+
+        cutoff_date = (datetime.now(UKRAINE_TZ) - timedelta(days=days_old)).strftime('%Y-%m-%d')
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Отримати ID старих заходів
+        cursor.execute('SELECT id FROM events WHERE date < ? AND status != "cancelled"', (cutoff_date,))
+        old_event_ids = [row[0] for row in cursor.fetchall()]
+
+        if not old_event_ids:
+            conn.close()
+            return 0
+
+        # Змінити статус старих заходів на 'archived'
+        placeholders = ','.join('?' * len(old_event_ids))
+        cursor.execute(f'''
+            UPDATE events
+            SET status = 'archived'
+            WHERE id IN ({placeholders})
+        ''', old_event_ids)
+
+        archived_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return archived_count
