@@ -3285,7 +3285,13 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         application_results = []
         events_for_update: Dict[int, str] = {}
+        submitted_events: List[Dict] = []
+        already_applied_events: List[Dict] = []
         for event in valid_events:
+            if db.user_has_application_for_event(update.effective_user.id, event['id']):
+                already_applied_events.append(event)
+                continue
+
             application_id = db.create_application(
                 event_id=event['id'],
                 user_id=update.effective_user.id,
@@ -3298,37 +3304,71 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             application_results.append((application_id, event))
             events_for_update[event['id']] = event['date']
+            submitted_events.append(event)
 
         for event_id in events_for_update.keys():
             db.recalculate_application_positions(event_id)
 
         # Повідомлення користувачу
-        lines = ["✅ Вашу заявку успішно подано!", ""]
+        if not application_results:
+            lines = ["ℹ️ Нова заявка не створена.", ""]
 
-        if len(valid_events) == 1:
-            event = valid_events[0]
-            lines.extend([
-                f"📋 Процедура: {event['procedure_type']}",
-                f"📅 Дата: {format_date(event['date'])}",
-                f"🕐 Час: {event['time']}"
-            ])
+            if already_applied_events:
+                lines.append("Ви вже маєте заявки на такі процедури:")
+                for event in already_applied_events:
+                    lines.append(
+                        f"- {event['procedure_type']} — {format_date(event['date'])} {event['time']}"
+                    )
+
+            if unavailable_events:
+                if lines and lines[-1] != "":
+                    lines.append("")
+                lines.append("Ці процедури зараз недоступні для подачі заявки:")
+                for event in unavailable_events:
+                    if event:
+                        date_part = format_date(event['date']) if event.get('date') else "—"
+                        time_part = event.get('time', "—")
+                        procedure = event.get('procedure_type', f"ID {event.get('id')}")
+                        lines.append(f"- {procedure} — {date_part} {time_part}")
+
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append("Якщо потрібно оновити дані, зверніться до адміністратора.")
         else:
-            lines.append("Процедури:")
-            for event in valid_events:
-                lines.append(f"- {event['procedure_type']} — {format_date(event['date'])} {event['time']}")
+            lines = ["✅ Вашу заявку успішно подано!", ""]
 
-        if unavailable_events:
+            if len(submitted_events) == 1:
+                event = submitted_events[0]
+                lines.extend([
+                    f"📋 Процедура: {event['procedure_type']}",
+                    f"📅 Дата: {format_date(event['date'])}",
+                    f"🕐 Час: {event['time']}"
+                ])
+            else:
+                lines.append("Процедури:")
+                for event in submitted_events:
+                    lines.append(f"- {event['procedure_type']} — {format_date(event['date'])} {event['time']}")
+
+            if already_applied_events:
+                lines.append("")
+                lines.append("Ви вже маєте заявки на такі процедури:")
+                for event in already_applied_events:
+                    lines.append(
+                        f"- {event['procedure_type']} — {format_date(event['date'])} {event['time']}"
+                    )
+
+            if unavailable_events:
+                lines.append("")
+                lines.append("Не вдалося подати заявку на такі процедури:")
+                for event in unavailable_events:
+                    if event:
+                        date_part = format_date(event['date']) if event.get('date') else "—"
+                        time_part = event.get('time', "—")
+                        procedure = event.get('procedure_type', f"ID {event.get('id')}")
+                        lines.append(f"- {procedure} — {date_part} {time_part}")
+
             lines.append("")
-            lines.append("Не вдалося подати заявку на такі процедури:")
-            for event in unavailable_events:
-                if event:
-                    date_part = format_date(event['date']) if event.get('date') else "—"
-                    time_part = event.get('time', "—")
-                    procedure = event.get('procedure_type', f"ID {event.get('id')}")
-                    lines.append(f"- {procedure} — {date_part} {time_part}")
-
-        lines.append("")
-        lines.append("Очікуйте на розгляд адміністратором.")
+            lines.append("Очікуйте на розгляд адміністратором.")
 
         # Видалити попереднє повідомлення та надіслати нове з клавіатурою
         try:
@@ -3363,7 +3403,7 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update_day_summary(context, event_date)
 
         # Відправка email-повідомлення адміністраторам
-        if EMAIL_ENABLED and valid_events:
+        if EMAIL_ENABLED and submitted_events:
             email_subject = f"Нова заявка від {app['full_name']}"
             email_lines = [
                 f"Отримано нову заявку!",
@@ -3374,8 +3414,8 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 ""
             ]
 
-            if len(valid_events) == 1:
-                event = valid_events[0]
+            if len(submitted_events) == 1:
+                event = submitted_events[0]
                 email_lines.extend([
                     f"📋 Процедура: {event['procedure_type']}",
                     f"📅 Дата: {format_date(event['date'])}",
@@ -3383,7 +3423,7 @@ async def submit_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 ])
             else:
                 email_lines.append("Процедури:")
-                for event in valid_events:
+                for event in submitted_events:
                     email_lines.append(f"  • {event['procedure_type']} — {format_date(event['date'])} {event['time']}")
 
             await send_email_notification(email_subject, "\n".join(email_lines))

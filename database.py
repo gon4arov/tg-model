@@ -398,6 +398,20 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
+    def user_has_application_for_event(self, user_id: int, event_id: int) -> bool:
+        """Перевірити, чи існує заявка користувача на конкретний захід"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT 1
+            FROM applications
+            WHERE user_id = ? AND event_id = ?
+            LIMIT 1
+        ''', (user_id, event_id))
+        exists = cursor.fetchone() is not None
+        conn.close()
+        return exists
+
     def update_application_group_message_id(self, application_id: int, message_id: int) -> None:
         """Оновити ID повідомлення заявки в групі"""
         conn = self.get_connection()
