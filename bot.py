@@ -2809,6 +2809,39 @@ async def apply_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Деякі з обраних процедур вже недоступні, тому вони були вилучені із заявки."
         )
 
+    duplicate_events: List[Dict] = []
+    filtered_events: List[Dict] = []
+    for event in ordered_events:
+        if db.user_has_application_for_event(user_id, event['id']):
+            duplicate_events.append(event)
+        else:
+            filtered_events.append(event)
+
+    if not filtered_events:
+        logger.info(
+            "Всі обрані процедури вже мають заявки користувача %s: %s",
+            user_id,
+            [event['id'] for event in duplicate_events]
+        )
+        lines = ["ℹ️ Нова заявка не створена.", ""]
+        lines.append("Ви вже маєте заявки на такі процедури:")
+        for event in duplicate_events:
+            lines.append(
+                f"- {event['procedure_type']} — {format_date(event['date'])} {event['time']}"
+            )
+        lines.append("")
+        lines.append("Повторна подача заявки на ту саму процедуру недоступна.")
+
+        context.user_data.clear()
+
+        await update.effective_message.reply_text(
+            "\n".join(lines),
+            reply_markup=get_user_keyboard()
+        )
+        return ConversationHandler.END
+
+    ordered_events = filtered_events
+
     context.user_data['apply_event_ids'] = [event['id'] for event in ordered_events]
     context.user_data['application'] = {
         'event_ids': [event['id'] for event in ordered_events],
@@ -2826,6 +2859,13 @@ async def apply_event_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note}"
         )
 
+    if duplicate_events:
+        summary_lines.append("")
+        summary_lines.append("Ви вже маєте заявки на такі процедури, тому їх пропущено:")
+        for event in duplicate_events:
+            summary_lines.append(
+                f"• {format_date(event['date'])} {event['time']} — {event['procedure_type']}"
+            )
 
     summary_text = "\n".join(summary_lines)
     if update.callback_query:
