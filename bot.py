@@ -1604,6 +1604,7 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
         event_status = " (Захід скасовано)" if app['event_status'] == 'cancelled' else ""
 
         message += f"{status_emoji} {app['procedure_type']}\n"
+        message += f"Номер заявки: №{app['id']}\n"
         message += f"📅 {format_date(app['date'])} о {app['time']}\n"
         message += f"Статус: {status_text}{event_status}\n\n"
 
@@ -1686,6 +1687,7 @@ async def handle_user_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
             event_status = " (Захід скасовано)" if app['event_status'] == 'cancelled' else ""
 
             message += f"{status_emoji} {app['procedure_type']}\n"
+            message += f"Номер заявки: №{app['id']}\n"
             message += f"📅 {format_date(app['date'])} о {app['time']}\n"
             message += f"Статус: {status_text}{event_status}\n\n"
 
