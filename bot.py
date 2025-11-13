@@ -15,7 +15,7 @@ from typing import Optional, Dict, List
 from datetime import datetime
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, Chat
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -162,6 +162,26 @@ APPLICATION_STATUS_EMOJI = {
 def is_admin(user_id: int) -> bool:
     """Перевірка чи користувач є адміністратором"""
     return user_id in ADMIN_IDS
+
+
+def is_private_chat(update: Update) -> bool:
+    """Перевіряє, чи є чат приватним"""
+    return update.effective_chat and update.effective_chat.type == Chat.PRIVATE
+
+
+async def require_private_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Перевіряє приватність чату та відповідає помилкою якщо ні.
+    Повертає True якщо private, False якщо ні.
+    """
+    if not is_private_chat(update):
+        if update.callback_query:
+            await update.callback_query.answer(
+                "Ця функція доступна лише в особистих повідомленнях з ботом",
+                show_alert=True
+            )
+        return False
+    return True
 
 
 async def send_message_to_all_admins(context: ContextTypes.DEFAULT_TYPE, text: str, **kwargs):
@@ -536,6 +556,10 @@ async def register_admin_dialog(context: ContextTypes.DEFAULT_TYPE, key: str, me
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
     """Відображення головного меню адміністратора"""
+    # Перевірка типу чату
+    if not await require_private_chat(update, context):
+        return
+
     if update.callback_query:
         query = update.callback_query
         await answer_callback_query(query)
@@ -586,6 +610,10 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, ed
 
 async def show_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Відображення меню налаштувань адміністратора"""
+    # Перевірка типу чату
+    if not await require_private_chat(update, context):
+        return
+
     # Підтримка як для callback_query, так і для text
     if update.callback_query:
         query = update.callback_query
@@ -708,6 +736,10 @@ def get_admin_keyboard():
 
 async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
     """Відображення головного меню користувача"""
+    # Перевірка типу чату
+    if not is_private_chat(update):
+        return
+
     text = (
         "Вітаємо!\n\n"
         "Цей бот допоможе вам записатися на косметологічні процедури.\n\n"
@@ -724,6 +756,11 @@ async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка команди /start"""
+    # Перевірка типу чату
+    if not is_private_chat(update):
+        logger.debug(f"start() ignored in non-private chat: {update.effective_chat.type}")
+        return ConversationHandler.END
+
     user_id = update.effective_user.id
     db.create_user(user_id)
     admin_message = update.message if (update.message and is_admin(user_id)) else None
@@ -834,6 +871,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_create_event_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка кнопки 'Створити захід'"""
+    # Перевірка типу чату
+    if not await require_private_chat(update, context):
+        return ConversationHandler.END
+
     query = update.callback_query
 
     if not is_admin(query.from_user.id):
@@ -1564,6 +1605,10 @@ async def confirm_cancel_event(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показати всі заявки користувача"""
+    # Перевірка типу чату
+    if not await require_private_chat(update, context):
+        return
+
     query = update.callback_query
     await answer_callback_query(query)
 
@@ -1623,6 +1668,10 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показати інформацію про бота"""
+    # Перевірка типу чату
+    if not await require_private_chat(update, context):
+        return
+
     query = update.callback_query
     await answer_callback_query(query)
 
@@ -4821,10 +4870,10 @@ def main():
     # Обробник створення заходу
     create_event_handler = ConversationHandler(
         entry_points=[
-            CommandHandler('create_event', create_event_start),
-            CommandHandler('new_event', create_event_start),
+            CommandHandler('create_event', create_event_start, filters=filters.ChatType.PRIVATE),
+            CommandHandler('new_event', create_event_start, filters=filters.ChatType.PRIVATE),
             CallbackQueryHandler(admin_create_event_button, pattern='^admin_create_event$'),
-            MessageHandler(filters.TEXT & filters.Regex('^🆕 Новий захід$'), create_event_start),
+            MessageHandler(filters.TEXT & filters.Regex('^🆕 Новий захід$') & filters.ChatType.PRIVATE, create_event_start),
             CallbackQueryHandler(create_event_same_date, pattern='^same_date_')
         ],
         states={
@@ -4881,7 +4930,7 @@ def main():
 
     # Обробник подачі заявки
     apply_event_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[CommandHandler('start', start, filters=filters.ChatType.PRIVATE)],
         states={
             APPLY_SELECT_EVENTS: [
                 CallbackQueryHandler(toggle_event_selection, pattern='^toggle_event_\\d+$'),
@@ -5029,13 +5078,13 @@ def main():
 
     # Обробник текстових команд меню адміністратора
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex('^(📋 Заходи|⚙️)$') & ~filters.COMMAND,
+        filters.TEXT & filters.Regex('^(📋 Заходи|⚙️)$') & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_admin_menu_text
     ))
 
     # Обробник текстових команд меню користувача
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex('^(📋 Мої заявки|ℹ️ Інформація)$') & ~filters.COMMAND,
+        filters.TEXT & filters.Regex('^(📋 Мої заявки|ℹ️ Інформація)$') & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_user_menu_text
     ))
 
