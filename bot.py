@@ -8,12 +8,14 @@ import asyncio
 import html
 import json
 import smtplib
+import secrets
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Optional, Dict, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import time
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, BotCommand, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, Chat
 from telegram.constants import ParseMode
@@ -144,7 +146,66 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.0.0'
+VERSION = '1.2.0'  # Feature: актуальні заявки, архівація старих + Security: SQL injection, rate limiting, password comparison, HTML escaping
+
+# Rate Limiting налаштування
+RATE_LIMIT_REQUESTS = 10  # максимум запитів
+RATE_LIMIT_PERIOD = 60    # за період в секундах (1 хвилина)
+RATE_LIMIT_BAN_DURATION = 300  # бан на 5 хвилин при перевищенні
+
+
+class RateLimiter:
+    """Клас для контролю частоти запитів користувачів"""
+    def __init__(self, max_requests: int = RATE_LIMIT_REQUESTS, period: int = RATE_LIMIT_PERIOD):
+        self.max_requests = max_requests
+        self.period = period
+        self.user_requests = defaultdict(list)
+        self.banned_users = {}  # user_id -> timestamp коли закінчується бан
+
+    def is_rate_limited(self, user_id: int) -> tuple[bool, Optional[int]]:
+        """
+        Перевірити чи користувач перевищив ліміт
+        Повертає (True, seconds_until_unban) якщо заблоковано, інакше (False, None)
+        """
+        current_time = time.time()
+
+        # Перевірити чи користувач забанений
+        if user_id in self.banned_users:
+            ban_end = self.banned_users[user_id]
+            if current_time < ban_end:
+                return True, int(ban_end - current_time)
+            else:
+                # Бан закінчився
+                del self.banned_users[user_id]
+                self.user_requests[user_id].clear()
+
+        # Очистити старі запити
+        self.user_requests[user_id] = [
+            req_time for req_time in self.user_requests[user_id]
+            if current_time - req_time < self.period
+        ]
+
+        # Перевірити кількість запитів
+        if len(self.user_requests[user_id]) >= self.max_requests:
+            # Забанити користувача
+            self.banned_users[user_id] = current_time + RATE_LIMIT_BAN_DURATION
+            logger.warning(f"User {user_id} rate limited - {len(self.user_requests[user_id])} requests in {self.period}s")
+            return True, RATE_LIMIT_BAN_DURATION
+
+        # Додати поточний запит
+        self.user_requests[user_id].append(current_time)
+        return False, None
+
+    def reset_user(self, user_id: int):
+        """Скинути ліміти для користувача (для адмінів)"""
+        if user_id in self.user_requests:
+            del self.user_requests[user_id]
+        if user_id in self.banned_users:
+            del self.banned_users[user_id]
+
+
+# Глобальний rate limiter
+rate_limiter = RateLimiter()
 
 APPLICATION_STATUS_LABELS = {
     'pending': "⏳ Очікує",
@@ -163,6 +224,13 @@ APPLICATION_STATUS_EMOJI = {
 def is_admin(user_id: int) -> bool:
     """Перевірка чи користувач є адміністратором"""
     return user_id in ADMIN_IDS
+
+
+def safe_html(text: str) -> str:
+    """Безпечно екранувати HTML для Telegram"""
+    if not isinstance(text, str):
+        text = str(text)
+    return html.escape(text)
 
 
 def is_private_chat(update: Update) -> bool:
@@ -287,6 +355,42 @@ async def log_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as err:
         logger.debug(f"Не вдалося серіалізувати апдейт: {err}")
+
+
+async def rate_limit_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перевірка rate limit для користувача"""
+    if not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+
+    # Адміни не підпадають під rate limit
+    if is_admin(user_id):
+        return
+
+    # Перевірити rate limit
+    is_limited, seconds = rate_limiter.is_rate_limited(user_id)
+
+    if is_limited:
+        logger.warning(f"User {user_id} is rate limited. Remaining: {seconds}s")
+        try:
+            if update.message:
+                await update.message.reply_text(
+                    f"⚠️ Ви надсилаєте запити занадто часто.\n"
+                    f"Спробуйте знову через {seconds} секунд.",
+                    parse_mode=ParseMode.HTML
+                )
+            elif update.callback_query:
+                await update.callback_query.answer(
+                    f"Ви надсилаєте запити занадто часто. Зачекайте {seconds}с",
+                    show_alert=True
+                )
+        except Exception as e:
+            logger.error(f"Помилка при відповіді на rate limit: {e}")
+
+        # Припинити обробку апдейту
+        raise Exception("Rate limit exceeded")
+
 
 async def auto_delete_message(context, chat_id: int, message_id: int, delay: int = 3):
     """Автоматичне видалення повідомлення через вказану кількість секунд"""
@@ -1123,7 +1227,8 @@ async def clear_db_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    if password == DB_CLEAR_PASSWORD:
+    # Безпечне порівняння паролів з захистом від timing attacks
+    if secrets.compare_digest(password, DB_CLEAR_PASSWORD):
         try:
             dialog_message = await send_admin_message(
                 context,
@@ -1605,7 +1710,7 @@ async def confirm_cancel_event(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показати всі заявки користувача"""
+    """Показати актуальні заявки користувача (тільки майбутні заходи)"""
     # Перевірка типу чату
     if not await require_private_chat(update, context):
         return
@@ -1616,18 +1721,61 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = query.from_user.id
 
     # Отримати всі заявки користувача
-    applications = db.get_user_applications(user_id)
+    all_applications = db.get_user_applications(user_id)
+
+    # Поточна дата та час для фільтрації
+    now = datetime.now(UKRAINE_TZ)
+    current_date = now.date()
+    current_time = now.time()
+
+    # Фільтрувати тільки актуальні (майбутні) заявки
+    applications = []
+    archived_count = 0
+
+    for app in all_applications:
+        event_date = datetime.strptime(app['date'], '%Y-%m-%d').date()
+
+        # Якщо дата в майбутньому - додаємо
+        if event_date > current_date:
+            applications.append(app)
+        # Якщо дата сьогодні - перевіряємо час
+        elif event_date == current_date:
+            event_time = datetime.strptime(app['time'], '%H:%M').time()
+            if event_time >= current_time:
+                applications.append(app)
+            else:
+                archived_count += 1
+        else:
+            # Дата в минулому
+            archived_count += 1
 
     if not applications:
         keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="user_back_to_menu")]]
+
+        if archived_count > 0:
+            info_text = (
+                "У вас немає актуальних заявок.\n\n"
+                f"ℹ️ Заявки на минулі заходи ({archived_count}) автоматично приховані.\n\n"
+                "Щоб подати нову заявку, натисніть на повідомлення про захід в нашому каналі."
+            )
+        else:
+            info_text = (
+                "У вас поки немає заявок.\n\n"
+                "Щоб подати заявку, натисніть на повідомлення про захід в нашому каналі."
+            )
+
         await query.edit_message_text(
-            "У вас поки немає заявок.\n\n"
-            "Щоб подати заявку, натисніть на повідомлення про захід в нашому каналі.",
+            info_text,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
-    message = "Ваші заявки:\n\n"
+    # Формуємо повідомлення з інформацією про архівовані заявки
+    message = "📋 Ваші актуальні заявки:\n\n"
+
+    if archived_count > 0:
+        message = f"📋 Ваші актуальні заявки:\nℹ️ Приховано {archived_count} заявок на минулі заходи\n\n"
+
     keyboard = []
 
     for app in applications:
@@ -1649,7 +1797,8 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
 
         event_status = " (Захід скасовано)" if app['event_status'] == 'cancelled' else ""
 
-        message += f"{status_emoji} {app['procedure_type']}\n"
+        safe_procedure = safe_html(app['procedure_type'])
+        message += f"{status_emoji} {safe_procedure}\n"
         message += f"Номер заявки: №{app['id']}\n"
         message += f"📅 {format_date(app['date'])} о {app['time']}\n"
         message += f"Статус: {status_text}{event_status}\n\n"
@@ -1664,7 +1813,7 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
             ])
 
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="user_back_to_menu")])
-    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
 
 
 async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1704,17 +1853,59 @@ async def handle_user_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
 
     if text == "📋 Мої заявки":
         # Отримати всі заявки користувача
-        applications = db.get_user_applications(user_id)
+        all_applications = db.get_user_applications(user_id)
+
+        # Поточна дата та час для фільтрації
+        now = datetime.now(UKRAINE_TZ)
+        current_date = now.date()
+        current_time = now.time()
+
+        # Фільтрувати тільки актуальні (майбутні) заявки
+        applications = []
+        archived_count = 0
+
+        for app in all_applications:
+            event_date = datetime.strptime(app['date'], '%Y-%m-%d').date()
+
+            # Якщо дата в майбутньому - додаємо
+            if event_date > current_date:
+                applications.append(app)
+            # Якщо дата сьогодні - перевіряємо час
+            elif event_date == current_date:
+                event_time = datetime.strptime(app['time'], '%H:%M').time()
+                if event_time >= current_time:
+                    applications.append(app)
+                else:
+                    archived_count += 1
+            else:
+                # Дата в минулому
+                archived_count += 1
 
         if not applications:
-            await send_admin_message_from_update(update, context, 
-                "У вас поки немає заявок.\n\n"
-                "Щоб подати заявку, натисніть на повідомлення про захід в нашому каналі.",
+            if archived_count > 0:
+                info_text = (
+                    "У вас немає актуальних заявок.\n\n"
+                    f"ℹ️ Заявки на минулі заходи ({archived_count}) автоматично приховані.\n\n"
+                    "Щоб подати нову заявку, натисніть на повідомлення про захід в нашому каналі."
+                )
+            else:
+                info_text = (
+                    "У вас поки немає заявок.\n\n"
+                    "Щоб подати заявку, натисніть на повідомлення про захід в нашому каналі."
+                )
+
+            await send_admin_message_from_update(update, context,
+                info_text,
                 reply_markup=get_user_keyboard()
             )
             return
 
-        message = "Ваші заявки:\n\n"
+        # Формуємо повідомлення з інформацією про архівовані заявки
+        message = "📋 Ваші актуальні заявки:\n\n"
+
+        if archived_count > 0:
+            message = f"📋 Ваші актуальні заявки:\nℹ️ Приховано {archived_count} заявок на минулі заходи\n\n"
+
         keyboard = []
 
         for app in applications:
@@ -1736,7 +1927,8 @@ async def handle_user_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
 
             event_status = " (Захід скасовано)" if app['event_status'] == 'cancelled' else ""
 
-            message += f"{status_emoji} {app['procedure_type']}\n"
+            safe_procedure = safe_html(app['procedure_type'])
+            message += f"{status_emoji} {safe_procedure}\n"
             message += f"Номер заявки: №{app['id']}\n"
             message += f"📅 {format_date(app['date'])} о {app['time']}\n"
             message += f"Статус: {status_text}{event_status}\n\n"
@@ -1750,9 +1942,10 @@ async def handle_user_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
                     )
                 ])
 
-        await send_admin_message_from_update(update, context, 
+        await send_admin_message_from_update(update, context,
             message,
-            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else get_user_keyboard()
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else get_user_keyboard(),
+            parse_mode=ParseMode.HTML
         )
 
     elif text == "ℹ️ Інформація":
@@ -3554,12 +3747,17 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
 
     # Формат як у групових заявках
     status_icon = format_application_status(app['status'], app.get('is_primary', False))
+    # Екранувати user input для безпеки
+    safe_name = safe_html(app['full_name'])
+    safe_phone = safe_html(app['phone'])
+    safe_procedure = safe_html(event['procedure_type'])
+
     message_text = (
-        f"Нова заявка від {app['full_name']}\n"
-        f"Телефон: {app['phone']}\n"
+        f"Нова заявка від {safe_name}\n"
+        f"Телефон: {safe_phone}\n"
         f"ID користувача: {app['user_id']}\n\n"
         f"Обрана процедура:\n"
-        f"1. (№{application_id}) {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
+        f"1. (№{application_id}) {format_date(event['date'])} {event['time']} — {safe_procedure} {status_icon}"
     )
 
     keyboard = build_single_application_keyboard(app, event)
@@ -3622,9 +3820,13 @@ def format_application_status(status: str, is_primary: bool = False) -> str:
 
 def build_group_application_text(applications: list, candidate: dict) -> str:
     """Побудувати текст групової заявки"""
+    # Екранувати всі user input для безпеки
+    safe_name = safe_html(candidate['full_name'])
+    safe_phone = safe_html(candidate['phone'])
+
     lines = [
-        f"Нова заявка від {candidate['full_name']}",
-        f"Телефон: {candidate['phone']}",
+        f"Нова заявка від {safe_name}",
+        f"Телефон: {safe_phone}",
         f"ID користувача: {candidate['user_id']}",
         "",
         "Обрані процедури:"
@@ -3635,8 +3837,9 @@ def build_group_application_text(applications: list, candidate: dict) -> str:
         app_id = item['id']
         status_icon = format_application_status(item['status'], item.get('is_primary', False))
         photo_note = " (фото обов'язково)" if event.get('needs_photo') else ""
+        safe_procedure = safe_html(event['procedure_type'])
         lines.append(
-            f"{idx}. (№{app_id}) {format_date(event['date'])} {event['time']} — {event['procedure_type']}{photo_note} {status_icon}"
+            f"{idx}. (№{app_id}) {format_date(event['date'])} {event['time']} — {safe_procedure}{photo_note} {status_icon}"
         )
 
     return "\n".join(lines)
@@ -4183,12 +4386,17 @@ async def refresh_single_application_message(
 
     # Формуємо оновлений текст
     status_icon = format_application_status(app['status'], app.get('is_primary', False))
+    # Екранувати user input для безпеки
+    safe_name = safe_html(app['full_name'])
+    safe_phone = safe_html(app['phone'])
+    safe_procedure = safe_html(event['procedure_type'])
+
     message_text = (
-        f"Нова заявка від {app['full_name']}\n"
-        f"Телефон: {app['phone']}\n"
+        f"Нова заявка від {safe_name}\n"
+        f"Телефон: {safe_phone}\n"
         f"ID користувача: {app['user_id']}\n\n"
         f"Обрана процедура:\n"
-        f"1. (№{application_id}) {format_date(event['date'])} {event['time']} — {event['procedure_type']} {status_icon}"
+        f"1. (№{application_id}) {format_date(event['date'])} {event['time']} — {safe_procedure} {status_icon}"
     )
 
     keyboard = build_single_application_keyboard(app, event)
@@ -5088,6 +5296,9 @@ def main():
         filters.TEXT & filters.Regex('^(📋 Мої заявки|ℹ️ Інформація)$') & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_user_menu_text
     ))
+
+    # Rate limiting middleware - найвищий пріоритет
+    application.add_handler(TypeHandler(Update, rate_limit_check), group=-1)
 
     # Обробник повідомлень від кандидатів (пересилання в групу) - нижчий пріоритет
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_candidate_message), group=1)

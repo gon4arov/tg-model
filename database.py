@@ -109,6 +109,18 @@ class Database:
 
     def _add_column_if_missing(self, table: str, column: str, definition: str) -> None:
         """Додати колонку до таблиці, якщо вона відсутня"""
+        # Валідація імені таблиці та колонки (тільки alphanumeric + underscore)
+        import re
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table):
+            raise ValueError(f"Invalid table name: {table}")
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', column):
+            raise ValueError(f"Invalid column name: {column}")
+
+        # Whitelist дозволених таблиць
+        allowed_tables = {'users', 'events', 'applications', 'application_photos', 'procedure_types', 'day_messages'}
+        if table not in allowed_tables:
+            raise ValueError(f"Table {table} not in allowed list")
+
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(f"PRAGMA table_info({table})")
