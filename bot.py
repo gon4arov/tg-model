@@ -144,6 +144,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
+VERSION = '1.0.0'
 
 APPLICATION_STATUS_LABELS = {
     'pending': "⏳ Очікує",
@@ -635,7 +636,7 @@ async def show_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("❌ Закрити", callback_data="close_message")]
     ]
 
-    text = "Налаштування:"
+    text = f"Налаштування:\n\n📦 Версія бота: {VERSION}"
 
     if is_callback:
         await clear_admin_dialog(context, 'admin_dialog')
