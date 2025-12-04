@@ -12,3 +12,4 @@ img/
 algoritm.txt
 *.png
 *.txt
+venv/
