@@ -4,6 +4,7 @@ dist/
 .mcp.json
 *.db
 *.log
+.log.*
 .DS_Store
 __pycache__/
 *.pyc
