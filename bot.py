@@ -4175,7 +4175,7 @@ async def send_primary_instruction(context: ContextTypes.DEFAULT_TYPE, app: dict
                     await context.bot.send_video(
                         chat_id=app['user_id'],
                         video=video_file,
-                        caption="Відеоінструкція до вашого візиту"
+                        caption="На відео показано, як нас знайти! Інструкція щодо візиту вище"
                     )
             except Exception as video_err:
                 logger.error(f"Не вдалося надіслати відеоінструкцію основному кандидату: {video_err}")
