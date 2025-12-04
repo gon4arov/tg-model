@@ -4167,6 +4167,21 @@ async def send_primary_instruction(context: ContextTypes.DEFAULT_TYPE, app: dict
             text=instruction,
             reply_markup=get_user_keyboard()
         )
+
+        video_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "find.mp4")
+        if os.path.exists(video_path):
+            try:
+                with open(video_path, "rb") as video_file:
+                    await context.bot.send_video(
+                        chat_id=app['user_id'],
+                        video=video_file,
+                        caption="Відеоінструкція до вашого візиту"
+                    )
+            except Exception as video_err:
+                logger.error(f"Не вдалося надіслати відеоінструкцію основному кандидату: {video_err}")
+        else:
+            logger.warning("Відеоінструкцію не надіслано: файл find.mp4 не знайдено поруч з bot.py")
+
         return True
     except Exception as err:
         logger.error(f"Помилка відправки інструкції основному кандидату: {err}")
