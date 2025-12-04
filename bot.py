@@ -71,6 +71,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+# Прибираємо шумні httpx-запити (getUpdates 200 OK), лишаємо попередження/помилки
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 LOG_FILE = os.getenv('BOT_LOG_FILE', 'bot-actions.log')
 if LOG_FILE:
@@ -3774,48 +3777,82 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
     )
 
     keyboard = build_single_application_keyboard(app, event)
+    fallback_keyboard = remove_profile_button(keyboard)
+
+    async def send_single_message(markup: InlineKeyboardMarkup):
+        return await context.bot.send_message(
+            chat_id=channel_id,
+            text=message_text,
+            reply_markup=markup
+        )
+
+    async def send_single_photo(markup: InlineKeyboardMarkup):
+        return await context.bot.send_photo(
+            chat_id=channel_id,
+            photo=photos[0],
+            caption=message_text,
+            reply_markup=markup
+        )
 
     if photos:
         if len(photos) == 1:
             try:
-                message = await context.bot.send_photo(
-                    chat_id=channel_id,
-                    photo=photos[0],
-                    caption=message_text,
-                    reply_markup=keyboard
-                )
+                message = await send_single_photo(keyboard)
             except ChatMigrated as e:
                 new_id = e.new_chat_id
                 context.bot_data['applications_channel_id'] = new_id
                 APPLICATIONS_CHANNEL_ID = new_id
                 return await publish_application_to_channel(context, application_id)
+            except BadRequest as err:
+                if "Button_user_privacy_restricted" in str(err):
+                    logger.warning("Публікація заявки без кнопки профілю (privacy): application_id=%s", application_id)
+                    try:
+                        message = await send_single_photo(fallback_keyboard)
+                    except Exception as retry_err:
+                        logger.error("Не вдалося опублікувати заявку навіть без профілю: %s", retry_err)
+                        return
+                else:
+                    raise
         else:
             media = [InputMediaPhoto(media=photo_id, caption=message_text if i == 0 else '')
                      for i, photo_id in enumerate(photos)]
             try:
                 messages = await context.bot.send_media_group(chat_id=channel_id, media=media)
-                message = await context.bot.send_message(
-                    chat_id=channel_id,
-                    text=f"Заявка (№{application_id})",
-                    reply_markup=keyboard
-                )
+                message = await send_single_message(keyboard)
             except ChatMigrated as e:
                 new_id = e.new_chat_id
                 context.bot_data['applications_channel_id'] = new_id
                 APPLICATIONS_CHANNEL_ID = new_id
                 return await publish_application_to_channel(context, application_id)
+            except BadRequest as err:
+                if "Button_user_privacy_restricted" in str(err):
+                    logger.warning("Публікація заявки без кнопки профілю (media, privacy): application_id=%s", application_id)
+                    try:
+                        message = await send_single_message(fallback_keyboard)
+                    except Exception as retry_err:
+                        logger.error("Не вдалося опублікувати заявку навіть без профілю (media): %s", retry_err)
+                        return
+                else:
+                    raise
     else:
         try:
-            message = await context.bot.send_message(
-                chat_id=channel_id,
-                text=message_text,
-                reply_markup=keyboard
-            )
+            message = await send_single_message(keyboard)
         except ChatMigrated as e:
             new_id = e.new_chat_id
             context.bot_data['applications_channel_id'] = new_id
             APPLICATIONS_CHANNEL_ID = new_id
             return await publish_application_to_channel(context, application_id)
+        except BadRequest as err:
+            if "Button_user_privacy_restricted" in str(err):
+                logger.warning("Публікація заявки без кнопки профілю (no photo, privacy): application_id=%s", application_id)
+                try:
+                    message = await send_single_message(fallback_keyboard)
+                except Exception as retry_err:
+                    logger.error("Не вдалося опублікувати заявку навіть без профілю (no photo): %s", retry_err)
+                    return
+            else:
+                logger.error(f"Не вдалося опублікувати заявку в канал: {err}")
+                return
         except Exception as err:
             logger.error(f"Не вдалося опублікувати заявку в канал: {err}")
             return
@@ -3926,6 +3963,16 @@ def build_single_application_keyboard(application: dict, event: dict) -> InlineK
         [InlineKeyboardButton("👤 Профіль кандидата", url=f"tg://user?id={application['user_id']}")]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def remove_profile_button(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
+    """Повернути клавіатуру без кнопки відкриття профілю (tg://user?id=...)"""
+    rows = []
+    for row in markup.inline_keyboard:
+        filtered = [btn for btn in row if not (getattr(btn, "url", "") or "").startswith("tg://user?id=")]
+        if filtered:
+            rows.append(filtered)
+    return InlineKeyboardMarkup(rows) if rows else InlineKeyboardMarkup([])
 
 
 def format_day_count_text(count: int) -> str:
