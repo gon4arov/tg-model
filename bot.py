@@ -487,7 +487,20 @@ async def send_admin_message(
         kwargs,
         trim_text(text)
     )
-    message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+    try:
+        message = await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+    except BadRequest as err:
+        error_text = str(err)
+        if "Message to be replied not found" in error_text and kwargs.get("reply_to_message_id"):
+            # Повторити відправку без реплаю, якщо оригінал вже видалили
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("reply_to_message_id", None)
+            logger.debug(
+                "Повторна відправка без reply_to_message_id через помилку Telegram: %s", error_text
+            )
+            message = await context.bot.send_message(chat_id=chat_id, text=text, **retry_kwargs)
+        else:
+            raise
     logger.debug(
         "Повідомлення адміну надіслано: chat_id=%s, message_id=%s",
         chat_id,
