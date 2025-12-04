@@ -146,7 +146,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.2.0'  # Feature: актуальні заявки, архівація старих + Security: SQL injection, rate limiting, password comparison, HTML escaping
+VERSION = '1.3.0'  # Feature: відеоінструкція для основного кандидата, форсування актуальних ID груп
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
@@ -5090,6 +5090,10 @@ def main():
         .persistence(persistence)
         .build()
     )
+
+    # Перекриваємо можливі застарілі значення з persistence актуальними з .env
+    application.bot_data['group_id'] = GROUP_ID
+    application.bot_data['applications_channel_id'] = APPLICATIONS_CHANNEL_ID
 
     # Обробник створення заходу
     create_event_handler = ConversationHandler(
