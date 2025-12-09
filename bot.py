@@ -149,7 +149,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.3.0'  # Feature: відеоінструкція для основного кандидата, форсування актуальних ID груп
+VERSION = '1.3.1'  # Fallback для заявок без кнопки профілю, приглушено httpx-логи
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
@@ -3805,11 +3805,19 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
                 return await publish_application_to_channel(context, application_id)
             except BadRequest as err:
                 if "Button_user_privacy_restricted" in str(err):
-                    logger.warning("Публікація заявки без кнопки профілю (privacy): application_id=%s", application_id)
+                    logger.warning(
+                        "Публікація заявки без кнопки профілю (privacy): application_id=%s, user_id=%s",
+                        application_id,
+                        app['user_id']
+                    )
                     try:
                         message = await send_single_photo(fallback_keyboard)
                     except Exception as retry_err:
-                        logger.error("Не вдалося опублікувати заявку навіть без профілю: %s", retry_err)
+                        logger.error(
+                            "Не вдалося опублікувати заявку навіть без профілю: application_id=%s, err=%s",
+                            application_id,
+                            retry_err
+                        )
                         return
                 else:
                     raise
@@ -3826,11 +3834,19 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
                 return await publish_application_to_channel(context, application_id)
             except BadRequest as err:
                 if "Button_user_privacy_restricted" in str(err):
-                    logger.warning("Публікація заявки без кнопки профілю (media, privacy): application_id=%s", application_id)
+                    logger.warning(
+                        "Публікація заявки без кнопки профілю (media, privacy): application_id=%s, user_id=%s",
+                        application_id,
+                        app['user_id']
+                    )
                     try:
                         message = await send_single_message(fallback_keyboard)
                     except Exception as retry_err:
-                        logger.error("Не вдалося опублікувати заявку навіть без профілю (media): %s", retry_err)
+                        logger.error(
+                            "Не вдалося опублікувати заявку навіть без профілю (media): application_id=%s, err=%s",
+                            application_id,
+                            retry_err
+                        )
                         return
                 else:
                     raise
@@ -3844,11 +3860,19 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
             return await publish_application_to_channel(context, application_id)
         except BadRequest as err:
             if "Button_user_privacy_restricted" in str(err):
-                logger.warning("Публікація заявки без кнопки профілю (no photo, privacy): application_id=%s", application_id)
+                logger.warning(
+                    "Публікація заявки без кнопки профілю (no photo, privacy): application_id=%s, user_id=%s",
+                    application_id,
+                    app['user_id']
+                )
                 try:
                     message = await send_single_message(fallback_keyboard)
                 except Exception as retry_err:
-                    logger.error("Не вдалося опублікувати заявку навіть без профілю (no photo): %s", retry_err)
+                    logger.error(
+                        "Не вдалося опублікувати заявку навіть без профілю (no photo): application_id=%s, err=%s",
+                        application_id,
+                        retry_err
+                    )
                     return
             else:
                 logger.error(f"Не вдалося опублікувати заявку в канал: {err}")
