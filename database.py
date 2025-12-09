@@ -649,16 +649,15 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Перевірити чи таблиця порожня
-        cursor.execute('SELECT COUNT(*) FROM procedure_types')
-        count = cursor.fetchone()[0]
-
-        if count == 0:
-            # Додати початкові типи процедур
-            for procedure_type in PROCEDURE_TYPES:
-                cursor.execute('''
-                    INSERT INTO procedure_types (name) VALUES (?)
-                ''', (procedure_type,))
+        # Вставити відсутні типи процедур
+        cursor.execute('SELECT name FROM procedure_types')
+        existing = {row[0] for row in cursor.fetchall()}
+        missing = [ptype for ptype in PROCEDURE_TYPES if ptype not in existing]
+        for procedure_type in missing:
+            cursor.execute(
+                'INSERT INTO procedure_types (name, is_active) VALUES (?, 1)',
+                (procedure_type,)
+            )
 
         conn.commit()
         conn.close()

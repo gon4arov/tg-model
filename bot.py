@@ -170,7 +170,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.3.5'  # Реліз: фікс блокування оновлення підсумку дня (управління флагом updating)
+VERSION = '1.4.0'  # Додано нові типи процедур, фікси денного підсумку та логів
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
