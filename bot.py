@@ -170,7 +170,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.5.0'  # Нагадування primary (24h/3h), нові типи процедур, фікси денного підсумку та логів
+VERSION = '1.5.1'  # Нагадування primary (24h/3h) із guard на JobQueue, нові типи процедур, фікси денного підсумку та логів
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
@@ -4075,6 +4075,8 @@ def _get_event_datetime(event: dict) -> Optional[datetime]:
 
 def cancel_primary_reminders(job_queue, application_id: int) -> None:
     """Скасувати заплановані нагадування для заявки"""
+    if job_queue is None:
+        return
     for tag in ("24h", "3h"):
         name = f"reminder_app_{application_id}_{tag}"
         for job in job_queue.get_jobs_by_name(name):
@@ -4119,6 +4121,9 @@ async def send_primary_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def schedule_primary_reminders(context: ContextTypes.DEFAULT_TYPE, app: dict, event: dict) -> None:
     """Запланувати нагадування основному кандидату за 24h та 3h"""
     job_queue = context.application.job_queue
+    if job_queue is None:
+        logger.debug("JobQueue відсутній, нагадування не заплановано: app_id=%s", app["id"])
+        return
     cancel_primary_reminders(job_queue, app["id"])
 
     event_dt = _get_event_datetime(event)
