@@ -84,10 +84,14 @@ class KyivFormatter(logging.Formatter):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-# Задати форматер з київською зоною для існуючих хендлерів root
+# Задати форматери: для консолі без часу (journald вже ставить префікс), для файлів — з часом
+console_formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
 default_formatter = KyivFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 for handler in logging.getLogger().handlers:
-    handler.setFormatter(default_formatter)
+    if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+        handler.setFormatter(console_formatter)
+    else:
+        handler.setFormatter(default_formatter)
 # Прибираємо шумні httpx-запити (getUpdates 200 OK), лишаємо попередження/помилки
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -166,7 +170,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.3.3'  # Київський час у всіх форматерах, логування fallback без кнопки профілю
+VERSION = '1.3.4'  # Прибрано дубль часу в консолі, логування fallback без кнопки профілю
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
