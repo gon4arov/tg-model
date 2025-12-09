@@ -170,7 +170,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.3.4'  # Прибрано дубль часу в консолі, логування fallback без кнопки профілю
+VERSION = '1.3.5'  # Реліз: фікс блокування оновлення підсумку дня (управління флагом updating)
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
