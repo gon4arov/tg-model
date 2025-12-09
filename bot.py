@@ -66,6 +66,9 @@ from constants import (
 load_dotenv()
 
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
+# Глобально перевизначаємо конвертер часу для форматерів, щоб усі логери й сторонні бібліотеки
+# використовували київський час, навіть якщо додають власні хендлери.
+logging.Formatter.converter = lambda *args: datetime.now(KYIV_TZ).timetuple()
 
 
 class KyivFormatter(logging.Formatter):
@@ -163,7 +166,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.3.2'  # Логи у часовій зоні Києва, логування fallback без кнопки профілю
+VERSION = '1.3.3'  # Київський час у всіх форматерах, логування fallback без кнопки профілю
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
