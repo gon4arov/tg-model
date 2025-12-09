@@ -14,6 +14,7 @@ from email.mime.multipart import MIMEMultipart
 from collections import Counter, defaultdict
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import time
 
@@ -64,13 +65,26 @@ from constants import (
 # Завантаження змінних середовища
 load_dotenv()
 
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
+
+
+class KyivFormatter(logging.Formatter):
+    """Форматер для логів у часовій зоні Europe/Kyiv"""
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, KYIV_TZ)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat()
+
+
 # Налаштування логування
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+# Задати форматер з київською зоною для існуючих хендлерів root
+default_formatter = KyivFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(default_formatter)
 # Прибираємо шумні httpx-запити (getUpdates 200 OK), лишаємо попередження/помилки
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -86,7 +100,7 @@ if LOG_FILE:
             encoding='utf-8'
         )
         file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
+        file_handler.setFormatter(KyivFormatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
         logging.getLogger().addHandler(file_handler)
         logger.info(f"Логування активовано. Файл: {LOG_FILE} (ротація: 10 МБ, 5 бекапів)")
     except Exception as err:
@@ -149,7 +163,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.3.1'  # Fallback для заявок без кнопки профілю, приглушено httpx-логи
+VERSION = '1.3.2'  # Логи у часовій зоні Києва, логування fallback без кнопки профілю
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
