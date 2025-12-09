@@ -58,8 +58,8 @@ from constants import (
     CLEAR_DB_PASSWORD,
     MAX_FULL_NAME_LENGTH,
     MAX_COMMENT_LENGTH,
-    MAX_PROCEDURE_TYPE_NAME_LENGTH,
-    MAX_ACTIVE_APPLICATIONS_PER_USER
+MAX_PROCEDURE_TYPE_NAME_LENGTH,
+MAX_ACTIVE_APPLICATIONS_PER_USER
 )
 
 # Завантаження змінних середовища
@@ -170,7 +170,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.4.0'  # Додано нові типи процедур, фікси денного підсумку та логів
+VERSION = '1.5.0'  # Нагадування primary (24h/3h), нові типи процедур, фікси денного підсумку та логів
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
@@ -4064,6 +4064,80 @@ def format_status_counts(counter: Counter) -> str:
     return " ".join(parts) if parts else "заявок поки немає"
 
 
+def _get_event_datetime(event: dict) -> Optional[datetime]:
+    """Повернути datetime події в київському часі"""
+    try:
+        dt = datetime.strptime(f"{event['date']} {event['time']}", "%Y-%m-%d %H:%M")
+        return dt.replace(tzinfo=UKRAINE_TZ)
+    except Exception:
+        return None
+
+
+def cancel_primary_reminders(job_queue, application_id: int) -> None:
+    """Скасувати заплановані нагадування для заявки"""
+    for tag in ("24h", "3h"):
+        name = f"reminder_app_{application_id}_{tag}"
+        for job in job_queue.get_jobs_by_name(name):
+            job.schedule_removal()
+
+
+async def send_primary_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Надіслати нагадування основному кандидату, якщо він досі primary"""
+    data = context.job.data or {}
+    application_id = data.get("application_id")
+    hours = data.get("hours")
+    if not application_id:
+        return
+
+    app = db.get_application(application_id)
+    if not app or app.get("status") != "primary":
+        return
+
+    event = db.get_event(app["event_id"])
+    if not event:
+        return
+
+    event_dt = _get_event_datetime(event)
+    if event_dt and event_dt <= datetime.now(UKRAINE_TZ):
+        return
+
+    text = (
+        "Нагадування про вашу участь!\n\n"
+        f"Процедура: {event['procedure_type']}\n"
+        f"Дата: {format_date(event['date'])}\n"
+        f"Час: {event['time']}\n"
+    )
+    if hours:
+        text = f"Нагадування (за {hours} год до початку).\n\n" + text
+
+    try:
+        await context.bot.send_message(chat_id=app["user_id"], text=text)
+    except Exception as err:
+        logger.debug("Не вдалося надіслати нагадування primary: app_id=%s err=%s", application_id, err)
+
+
+async def schedule_primary_reminders(context: ContextTypes.DEFAULT_TYPE, app: dict, event: dict) -> None:
+    """Запланувати нагадування основному кандидату за 24h та 3h"""
+    job_queue = context.application.job_queue
+    cancel_primary_reminders(job_queue, app["id"])
+
+    event_dt = _get_event_datetime(event)
+    if not event_dt:
+        return
+
+    now = datetime.now(UKRAINE_TZ)
+    for hours in (24, 3):
+        run_at = event_dt - timedelta(hours=hours)
+        if run_at <= now:
+            continue
+        job_queue.run_once(
+            send_primary_reminder,
+            when=run_at,
+            data={"application_id": app["id"], "hours": hours},
+            name=f"reminder_app_{app['id']}_{hours}h",
+        )
+
+
 def build_day_summary_text(context: ContextTypes.DEFAULT_TYPE, date: str) -> Optional[str]:
     """Сформувати підсумкове повідомлення по всіх процедурах дня"""
     all_events = db.get_events_by_date(date)
@@ -4317,6 +4391,7 @@ async def promote_candidate_to_primary(
 
     app = db.get_application(application_id)
     await update_day_summary(context, event['date'])
+    await schedule_primary_reminders(context, app, event)
     group_updated = await refresh_group_application_message(context, application_id)
     return {
         'app': app,
@@ -4734,6 +4809,7 @@ async def confirm_reject_primary(update: Update, context: ContextTypes.DEFAULT_T
 
     # Відхиляємо основного кандидата
     db.update_application_status(application_id, 'rejected')
+    cancel_primary_reminders(context.application.job_queue, application_id)
     db.recalculate_application_positions(application['event_id'])
 
     event = db.get_event(application['event_id'])
@@ -4844,6 +4920,9 @@ async def _finalize_application_cancellation(
     """Допоміжна функція для завершення скасування заявки"""
     application_id = app['id']
     event = db.get_event(app['event_id'])
+
+    if app.get('status') == 'primary':
+        cancel_primary_reminders(context.application.job_queue, application_id)
 
     db.update_application_status(application_id, 'cancelled')
     db.recalculate_application_positions(app['event_id'])
