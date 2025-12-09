@@ -170,7 +170,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.5.1'  # Нагадування primary (24h/3h) із guard на JobQueue, нові типи процедур, фікси денного підсумку та логів
+VERSION = '1.5.2'  # Privacy-fallback у групових/одиночних заявках, нагадування primary, нові типи процедур
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
@@ -4557,6 +4557,30 @@ async def refresh_group_application_message(
             text=text,
             reply_markup=keyboard
         )
+    except BadRequest as err:
+        if "Button_user_privacy_restricted" in str(err):
+            logger.warning(
+                "Оновлення групової заявки без профільної кнопки (privacy): group_msg_id=%s, user_id=%s",
+                group_message_id,
+                candidate['user_id']
+            )
+            safe_keyboard = remove_profile_button(keyboard)
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=channel_id,
+                    message_id=group_message_id,
+                    text=text,
+                    reply_markup=safe_keyboard
+                )
+            except Exception as retry_err:
+                logger.debug(
+                    "Не вдалося оновити комбіноване повідомлення заявки навіть без профільної кнопки: %s",
+                    retry_err
+                )
+                return False
+        else:
+            logger.debug(f"Не вдалося оновити комбіноване повідомлення заявки: {err}")
+            return False
     except Exception as err:
         logger.debug(f"Не вдалося оновити комбіноване повідомлення заявки: {err}")
         return False
@@ -4675,9 +4699,21 @@ async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not await refresh_single_application_message(context, application_id):
         # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
         if event:
-            await query.edit_message_reply_markup(
-                reply_markup=build_single_application_keyboard(app, event)
-            )
+            keyboard = build_single_application_keyboard(app, event)
+            try:
+                await query.edit_message_reply_markup(reply_markup=keyboard)
+            except BadRequest as err:
+                if "Button_user_privacy_restricted" in str(err):
+                    safe_keyboard = remove_profile_button(keyboard)
+                    try:
+                        await query.edit_message_reply_markup(reply_markup=safe_keyboard)
+                    except Exception as retry_err:
+                        logger.debug(
+                            "Не вдалося оновити клавіатуру навіть без профільної кнопки: %s",
+                            retry_err
+                        )
+                else:
+                    raise
         else:
             await query.edit_message_reply_markup(reply_markup=None)
 
