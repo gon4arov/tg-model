@@ -4558,7 +4558,19 @@ async def refresh_group_application_message(
             reply_markup=keyboard
         )
     except BadRequest as err:
-        if "Button_user_privacy_restricted" in str(err):
+        error_msg = str(err).lower()
+
+        # Якщо повідомлення видалене
+        if "message to edit not found" in error_msg or "message not found" in error_msg:
+            logger.debug(f"Повідомлення {group_message_id} не знайдено (можливо видалено)")
+            return False
+
+        # Якщо текст не змінено
+        if "message is not modified" in error_msg:
+            return True
+
+        # Обмеження приватності — прибираємо кнопку профілю
+        if "button_user_privacy_restricted" in str(err):
             logger.warning(
                 "Оновлення групової заявки без профільної кнопки (privacy): group_msg_id=%s, user_id=%s",
                 group_message_id,
@@ -4572,15 +4584,33 @@ async def refresh_group_application_message(
                     text=text,
                     reply_markup=safe_keyboard
                 )
+                return True
             except Exception as retry_err:
                 logger.debug(
                     "Не вдалося оновити комбіноване повідомлення заявки навіть без профільної кнопки: %s",
                     retry_err
                 )
                 return False
-        else:
-            logger.debug(f"Не вдалося оновити комбіноване повідомлення заявки: {err}")
-            return False
+
+        # Повідомлення може бути фото з caption
+        if "no text" in error_msg:
+            try:
+                await context.bot.edit_message_caption(
+                    chat_id=channel_id,
+                    message_id=group_message_id,
+                    caption=text,
+                    reply_markup=keyboard
+                )
+                return True
+            except BadRequest as caption_err:
+                caption_error = str(caption_err).lower()
+                if "message is not modified" in caption_error:
+                    return True
+                logger.debug(f"Не вдалося оновити caption комбінованого повідомлення: {caption_err}")
+                return False
+
+        logger.debug(f"Не вдалося оновити комбіноване повідомлення заявки: {err}")
+        return False
     except Exception as err:
         logger.debug(f"Не вдалося оновити комбіноване повідомлення заявки: {err}")
         return False
@@ -5214,6 +5244,7 @@ async def view_event_applications(update: Update, context: ContextTypes.DEFAULT_
 async def forward_candidate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пересилання повідомлень від кандидатів в групу"""
     user_id = update.effective_user.id
+    msg = update.effective_message
 
     # Перевірка що це не адмін
     if is_admin(user_id):
@@ -5221,7 +5252,7 @@ async def forward_candidate_message(update: Update, context: ContextTypes.DEFAUL
 
     # Ігнорувати команди з меню користувача та адміна
     menu_commands = ["📋 Мої заявки", "ℹ️ Інформація", "🆕 Новий захід", "📋 Заходи", "⚙️"]
-    if update.message.text and update.message.text in menu_commands:
+    if msg and msg.text and msg.text in menu_commands:
         return
 
     # Ігнорувати якщо це приватний чат (conversation активний)
@@ -5234,6 +5265,13 @@ async def forward_candidate_message(update: Update, context: ContextTypes.DEFAUL
     if not user or not user['full_name']:
         return
 
+    # Обробляємо лише текст або caption; інші типи пропускаємо
+    text_content = None
+    if msg:
+        text_content = msg.text or msg.caption
+    if not text_content:
+        return
+
     # Переслати повідомлення в групу
     try:
         message_text = (
@@ -5241,7 +5279,7 @@ async def forward_candidate_message(update: Update, context: ContextTypes.DEFAUL
             f"👤 {user['full_name']}\n"
             f"📱 {user['phone']}\n"
             f"🆔 User ID: {user_id}\n\n"
-            f"Текст: {update.message.text}"
+            f"Текст: {text_content}"
         )
 
         keyboard = [[InlineKeyboardButton("👤 Профіль кандидата", url=f"tg://user?id={user_id}")]]
