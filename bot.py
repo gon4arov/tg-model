@@ -2034,6 +2034,7 @@ async def cancel_user_application(update: Update, context: ContextTypes.DEFAULT_
     # Оновити денне підсумок
     if event:
         await update_day_summary(context, event['date'])
+        await sync_event_filled_state(context, event['id'])
 
     # Оновити повідомлення в групі заявок або одиночне
     if not await refresh_group_application_message(context, app_id):
@@ -2690,8 +2691,6 @@ async def publish_day_schedule_to_channel(
     created_events: list
 ):
     """Публікує розклад дня одним повідомленням з окремими кнопками для процедур"""
-    import time
-
     bot_username = (await context.bot.get_me()).username
 
     logger.debug(
@@ -2700,49 +2699,31 @@ async def publish_day_schedule_to_channel(
         [(event_id, item['time'], item['procedure']) for event_id, item in created_events]
     )
 
-    formatted_date = format_date(date)
-    weekday_acc = get_weekday_accusative(date)
-    header = [
-        "БЕЗКОШТОВНО!",
-        f"На {weekday_acc} ({formatted_date}) потрібні моделі",
-        ""
-    ]
-
-    event_lines = []
     base_timestamp = int(time.time())
 
-    sorted_events = sorted(created_events, key=lambda pair: pair[1]['time'])
-    for idx, (event_id, item) in enumerate(sorted_events, start=1):
-        procedure_name = html.escape(item['procedure'])
-        line = f"{item['time']} — <b>{procedure_name}</b>"
-        comment = item.get('comment')
-        if comment:
-            line += f" ({html.escape(comment)})"
-        line += "."
-        if item.get('needs_photo'):
-            line += " Фото ОБОВ'ЯЗКОВО!"
-        event_lines.append(line)
-        event_lines.append("")
+    schedule_events = []
+    for event_id, item in created_events:
+        schedule_events.append({
+            'id': event_id,
+            'time': item['time'],
+            'procedure_type': item['procedure'],
+            'comment': item.get('comment'),
+            'needs_photo': item.get('needs_photo'),
+            'status': item.get('status', 'published'),
+            'date': date
+        })
 
-    # Видалити останній порожній рядок якщо він залишився
-    if event_lines and event_lines[-1] == "":
-        event_lines.pop()
-
-    if len(sorted_events) == 1:
-        event_id, item = sorted_events[0]
-        deep_link = f"https://t.me/{bot_username}?start=event_{event_id}_{base_timestamp}"
-        button_rows = [[InlineKeyboardButton("Подати заявку", url=deep_link)]]
-    else:
-        payload = "_".join([str(base_timestamp)] + [str(event_id) for event_id, _ in sorted_events])
-        deep_link = f"https://t.me/{bot_username}?start=day_{payload}"
-        button_rows = [[InlineKeyboardButton("Подати заявку", url=deep_link)]]
-
-    message_text = "\n".join(header + event_lines)
+    message_text, keyboard = build_day_schedule_message(
+        bot_username,
+        date,
+        schedule_events,
+        timestamp=base_timestamp
+    )
 
     message = await context.bot.send_message(
         chat_id=EVENTS_GROUP_ID,
         text=message_text,
-        reply_markup=InlineKeyboardMarkup(button_rows),
+        reply_markup=keyboard,
         parse_mode=ParseMode.HTML
     )
 
@@ -2756,6 +2737,90 @@ async def publish_day_schedule_to_channel(
         db.update_event_message_id(event_id, message.message_id)
         db.update_event_status(event_id, 'published')
         logger.debug("Оновлено стан заходу: event_id=%s, message_id=%s", event_id, message.message_id)
+
+
+def build_day_schedule_message(
+    bot_username: str,
+    date: str,
+    events: List[dict],
+    *,
+    timestamp: Optional[int] = None
+) -> tuple[str, Optional[InlineKeyboardMarkup]]:
+    """Побудувати текст і клавіатуру розкладу дня з урахуванням заповнених слотів"""
+    formatted_date = format_date(date)
+    weekday_acc = get_weekday_accusative(date)
+    header = [
+        "БЕЗКОШТОВНО!",
+        f"На {weekday_acc} ({formatted_date}) потрібні моделі",
+        ""
+    ]
+
+    sorted_events = sorted(events, key=lambda item: item['time'])
+    event_lines: List[str] = []
+
+    for item in sorted_events:
+        procedure_name = html.escape(item['procedure_type'])
+        line = f"{item['time']} — <b>{procedure_name}</b>"
+        comment = item.get('comment')
+        if comment:
+            line += f" ({html.escape(comment)})"
+        line += "."
+        if item.get('needs_photo'):
+            line += " Фото ОБОВ'ЯЗКОВО!"
+
+        status = item.get('status', 'published')
+        if status == 'filled':
+            line = f"<s>{line}</s> МОДЕЛЬ ЗНАЙДЕНО!"
+        elif status == 'cancelled':
+            line = f"<s>{line}</s> (скасовано)"
+
+        event_lines.append(line)
+        event_lines.append("")
+
+    if event_lines and event_lines[-1] == "":
+        event_lines.pop()
+
+    open_events = [e for e in sorted_events if e.get('status') == 'published']
+    if open_events:
+        payload_timestamp = timestamp or int(time.time())
+        if len(open_events) == 1:
+            deep_link = f"https://t.me/{bot_username}?start=event_{open_events[0]['id']}_{payload_timestamp}"
+        else:
+            payload = "_".join([str(payload_timestamp)] + [str(event['id']) for event in open_events])
+            deep_link = f"https://t.me/{bot_username}?start=day_{payload}"
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Подати заявку", url=deep_link)]])
+    else:
+        keyboard = None
+
+    return "\n".join(header + event_lines), keyboard
+
+
+async def refresh_day_schedule_message(context: ContextTypes.DEFAULT_TYPE, date: str) -> None:
+    """Оновити повідомлення в групі пошуку моделей після змін слотів"""
+    events = db.get_events_by_date(date)
+    if not events:
+        return
+
+    message_id = next((item.get('message_id') for item in events if item.get('message_id')), None)
+    if not message_id:
+        return
+
+    bot_username = (await context.bot.get_me()).username
+    message_text, keyboard = build_day_schedule_message(bot_username, date, events)
+
+    try:
+        await context.bot.edit_message_text(
+            chat_id=EVENTS_GROUP_ID,
+            message_id=message_id,
+            text=message_text,
+            reply_markup=keyboard,
+            parse_mode=ParseMode.HTML
+        )
+    except BadRequest as err:
+        error_msg = str(err).lower()
+        if "message is not modified" in error_msg:
+            return
+        logger.debug("Не вдалося оновити повідомлення з розкладом: %s", err)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4390,6 +4455,7 @@ async def promote_candidate_to_primary(
 
     db.set_primary_application(application_id)
     db.recalculate_application_positions(event['id'])
+    await sync_event_filled_state(context, event['id'])
 
     instruction_sent = True
     if notify_user:
@@ -4405,6 +4471,22 @@ async def promote_candidate_to_primary(
         'instruction_sent': instruction_sent,
         'group_updated': group_updated
     }
+
+
+async def sync_event_filled_state(context: ContextTypes.DEFAULT_TYPE, event_id: int) -> None:
+    """Синхронізувати статус заходу (published/filled) та оновити публічне повідомлення"""
+    event = db.get_event(event_id)
+    if not event:
+        return
+
+    applications = db.get_applications_by_event(event_id)
+    has_primary = any(app.get('status') == 'primary' for app in applications)
+    new_status = 'filled' if has_primary else 'published'
+
+    if event.get('status') != new_status:
+        db.update_event_status(event_id, new_status)
+
+    await refresh_day_schedule_message(context, event['date'])
 
 
 async def promote_next_candidate(context: ContextTypes.DEFAULT_TYPE, event_id: int) -> Optional[int]:
@@ -4961,6 +5043,7 @@ async def confirm_reject_primary(update: Update, context: ContextTypes.DEFAULT_T
     event = db.get_event(application['event_id'])
     if event:
         await update_day_summary(context, event['date'])
+        await sync_event_filled_state(context, event['id'])
 
     # Відправляємо повідомлення кандидату про відхилення
     if event:
