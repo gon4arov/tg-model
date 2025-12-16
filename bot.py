@@ -4606,6 +4606,27 @@ async def refresh_group_application_message(
                 caption_error = str(caption_err).lower()
                 if "message is not modified" in caption_error:
                     return True
+                if "button_user_privacy_restricted" in caption_error:
+                    logger.warning(
+                        "Оновлення групової заявки без профільної кнопки (privacy/caption): group_msg_id=%s, user_id=%s",
+                        group_message_id,
+                        candidate['user_id']
+                    )
+                    safe_keyboard = remove_profile_button(keyboard)
+                    try:
+                        await context.bot.edit_message_caption(
+                            chat_id=channel_id,
+                            message_id=group_message_id,
+                            caption=text,
+                            reply_markup=safe_keyboard
+                        )
+                        return True
+                    except Exception as retry_err:
+                        logger.debug(
+                            "Не вдалося оновити caption комбінованого повідомлення навіть без профільної кнопки: %s",
+                            retry_err
+                        )
+                        return False
                 logger.debug(f"Не вдалося оновити caption комбінованого повідомлення: {caption_err}")
                 return False
 
@@ -4678,6 +4699,31 @@ async def refresh_single_application_message(
             if "message is not modified" in error_msg:
                 return True
 
+            # Обмеження приватності — прибираємо кнопку профілю і пробуємо знову
+            if "button_user_privacy_restricted" in error_msg:
+                logger.warning(
+                    "Оновлення одиночної заявки без профільної кнопки (privacy/text): msg_id=%s, user_id=%s",
+                    app['group_message_id'],
+                    app['user_id']
+                )
+                safe_keyboard = remove_profile_button(keyboard)
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=channel_id,
+                        message_id=app['group_message_id'],
+                        text=message_text,
+                        reply_markup=safe_keyboard
+                    )
+                    return True
+                except BadRequest as retry_err:
+                    retry_msg = str(retry_err).lower()
+                    if "message is not modified" in retry_msg:
+                        return True
+                    if "no text" not in retry_msg:
+                        logger.debug(f"Не вдалося оновити текст одиночної заявки без профілю: {retry_err}")
+                        return False
+                    error_msg = retry_msg  # продовжимо як фото
+
             # Інакше це може бути фото - спробуємо оновити caption
             try:
                 await context.bot.edit_message_caption(
@@ -4691,6 +4737,26 @@ async def refresh_single_application_message(
                 caption_error_msg = str(caption_err).lower()
                 if "message is not modified" in caption_error_msg:
                     return True
+                if "button_user_privacy_restricted" in caption_error_msg:
+                    logger.warning(
+                        "Оновлення одиночної заявки без профільної кнопки (privacy/caption): msg_id=%s, user_id=%s",
+                        app['group_message_id'],
+                        app['user_id']
+                    )
+                    safe_keyboard = remove_profile_button(keyboard)
+                    try:
+                        await context.bot.edit_message_caption(
+                            chat_id=channel_id,
+                            message_id=app['group_message_id'],
+                            caption=message_text,
+                            reply_markup=safe_keyboard
+                        )
+                        return True
+                    except BadRequest as retry_err:
+                        if "message is not modified" in str(retry_err).lower():
+                            return True
+                        logger.debug(f"Не вдалося оновити caption одиночної заявки без профілю: {retry_err}")
+                        return False
                 logger.debug(f"Не вдалося оновити caption: {caption_err}")
                 return False
     except Exception as err:
@@ -4821,9 +4887,17 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not await refresh_single_application_message(context, application_id):
         # Якщо не вдалося оновити текст, оновимо хоча б клавіатуру
         if event:
-            await query.edit_message_reply_markup(
-                reply_markup=build_single_application_keyboard(refreshed, event)
-            )
+            try:
+                await query.edit_message_reply_markup(
+                    reply_markup=build_single_application_keyboard(refreshed, event)
+                )
+            except BadRequest as err:
+                err_msg = str(err).lower()
+                if "button_user_privacy_restricted" in err_msg:
+                    safe_keyboard = remove_profile_button(build_single_application_keyboard(refreshed, event))
+                    await query.edit_message_reply_markup(reply_markup=safe_keyboard)
+                else:
+                    raise
         else:
             await query.edit_message_reply_markup(reply_markup=None)
 
