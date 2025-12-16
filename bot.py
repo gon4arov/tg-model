@@ -4673,7 +4673,7 @@ async def refresh_group_application_message(
             return True
 
         # Обмеження приватності — прибираємо кнопку профілю
-        if "button_user_privacy_restricted" in str(err):
+        if "button_user_privacy_restricted" in error_msg:
             logger.warning(
                 "Оновлення групової заявки без профільної кнопки (privacy): group_msg_id=%s, user_id=%s",
                 group_message_id,
