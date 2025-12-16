@@ -3843,8 +3843,9 @@ async def publish_application_to_channel(context: ContextTypes.DEFAULT_TYPE, app
                 else:
                     raise
         else:
-            media = [InputMediaPhoto(media=photo_id, caption=message_text if i == 0 else '')
-                     for i, photo_id in enumerate(photos)]
+            # Для медіагрупи прибираємо підпис, щоб уникнути дублювання тексту:
+            # інформація буде в окремому повідомленні з клавіатурою.
+            media = [InputMediaPhoto(media=photo_id, caption='') for photo_id in photos]
             try:
                 messages = await context.bot.send_media_group(chat_id=channel_id, media=media)
                 message = await send_single_message(keyboard)
