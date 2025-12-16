@@ -4575,6 +4575,26 @@ async def publish_group_application_to_channel(
         context.bot_data['applications_channel_id'] = new_id
         APPLICATIONS_CHANNEL_ID = new_id
         return await publish_group_application_to_channel(context, application_results, candidate, photos)
+    except BadRequest as err:
+        if "Button_user_privacy_restricted" in str(err):
+            logger.warning(
+                "Публікація комбінованої заявки без кнопки профілю (privacy): user_id=%s, apps=%s",
+                candidate.get('user_id'),
+                [a['id'] for a in applications_data]
+            )
+            safe_keyboard = remove_profile_button(keyboard)
+            try:
+                message = await context.bot.send_message(
+                    chat_id=channel_id,
+                    text=message_text,
+                    reply_markup=safe_keyboard
+                )
+            except Exception as retry_err:
+                logger.error(f"Не вдалося опублікувати комбіновану заявку навіть без профілю: {retry_err}")
+                return
+        else:
+            logger.error(f"Не вдалося опублікувати заявку в канал: {err}")
+            return
     except Exception as err:
         logger.error(f"Не вдалося опублікувати заявку в канал: {err}")
         return
