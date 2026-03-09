@@ -170,7 +170,7 @@ if not DB_CLEAR_PASSWORD:
 
 ADMIN_MESSAGE_TTL = 15
 MAX_APPLICATION_PHOTOS = 3
-VERSION = '1.5.4'  # Privacy-fallback, безпечне пересилання, оновлення заявок із caption
+VERSION = '1.5.5'  # Privacy-fallback, безпечне пересилання, оновлення заявок із caption
 
 # Rate Limiting налаштування
 RATE_LIMIT_REQUESTS = 10  # максимум запитів
