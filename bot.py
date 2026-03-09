@@ -233,8 +233,8 @@ rate_limiter = RateLimiter()
 
 APPLICATION_STATUS_LABELS = {
     'pending': "⏳ Очікує",
-    'approved': "✅ Резерв",
-    'primary': "🌟 Основний",
+    'approved': "✅ Схвалено",
+    'primary': "✅ Схвалено",
     'rejected': "❌ Відхилено",
     'cancelled': "🚫 Скасовано"
 }
@@ -1819,15 +1819,15 @@ async def user_my_applications(update: Update, context: ContextTypes.DEFAULT_TYP
         status_emoji = {
             'pending': '⏳',
             'approved': '✅',
-            'primary': '🌟',
+            'primary': '✅',
             'rejected': '❌',
             'cancelled': '🚫'
         }.get(app['status'], '❓')
 
         status_text = {
             'pending': 'Очікує розгляду',
-            'approved': 'Схвалено (резерв)',
-            'primary': 'Вашу заявку погоджено',
+            'approved': 'Схвалено',
+            'primary': 'Схвалено',
             'rejected': 'Відхилено',
             'cancelled': 'Скасовано'
         }.get(app['status'], 'Невідомо')
@@ -1949,15 +1949,15 @@ async def handle_user_menu_text(update: Update, context: ContextTypes.DEFAULT_TY
             status_emoji = {
                 'pending': '⏳',
                 'approved': '✅',
-                'primary': '🌟',
+                'primary': '✅',
                 'rejected': '❌',
                 'cancelled': '🚫'
             }.get(app['status'], '❓')
 
             status_text = {
                 'pending': 'Очікує розгляду',
-                'approved': 'Схвалено (резерв)',
-                'primary': 'Ви основний кандидат',
+                'approved': 'Схвалено',
+                'primary': 'Схвалено',
                 'rejected': 'Відхилено',
                 'cancelled': 'Скасовано'
             }.get(app['status'], 'Невідомо')
@@ -3979,6 +3979,147 @@ def format_application_status(status: str, is_primary: bool = False) -> str:
     return APPLICATION_STATUS_LABELS.get(status, APPLICATION_STATUS_LABELS['pending'])
 
 
+def get_rejected_procedures_for_related_applications(application: dict, event: dict) -> List[str]:
+    """Отримати перелік відхилених процедур серед пов'язаних заявок користувача."""
+    related_applications: List[dict] = []
+    group_message_id = application.get('group_message_id')
+    if group_message_id:
+        related_applications = db.get_applications_by_group_message(group_message_id)
+    else:
+        related_applications = db.get_user_applications_for_date(application['user_id'], event['date'])
+
+    rejected_procedures: List[str] = []
+    for app in related_applications:
+        if app.get('status') != 'rejected':
+            continue
+        procedure = (app.get('procedure_type') or '').strip()
+        if procedure and procedure not in rejected_procedures:
+            rejected_procedures.append(procedure)
+
+    return rejected_procedures
+
+
+def get_related_applications_for_review(application: dict, event: Optional[dict]) -> List[dict]:
+    """Отримати пов'язані заявки для формування підсумкового результату."""
+    group_message_id = application.get('group_message_id')
+    if group_message_id:
+        related = db.get_applications_by_group_message(group_message_id)
+        if related:
+            return related
+
+    app_with_event = db.get_application_with_event(application['id'])
+    return [app_with_event] if app_with_event else []
+
+
+def build_final_review_notification_text(related_applications: List[dict]) -> Optional[str]:
+    """Побудувати підсумковий текст після розгляду всіх пов'язаних заявок."""
+    if not related_applications:
+        return None
+
+    if any(app.get('status') == 'pending' for app in related_applications):
+        return None
+
+    approved_items: List[str] = []
+    rejected_items: List[str] = []
+
+    for app in related_applications:
+        procedure = (app.get('procedure_type') or '').strip()
+        event_time = (app.get('time') or '').strip()
+        if not procedure:
+            continue
+
+        item_text = f"{event_time} — {procedure}" if event_time else procedure
+        if app.get('status') in ('approved', 'primary'):
+            if item_text not in approved_items:
+                approved_items.append(item_text)
+        elif app.get('status') == 'rejected':
+            if item_text not in rejected_items:
+                rejected_items.append(item_text)
+
+    if not approved_items and not rejected_items:
+        return None
+
+    lines: List[str] = ["Вітаємо! Дякуємо за вашу заявку."]
+
+    if approved_items:
+        lines.append("")
+        lines.append("✅ <b>Підтверджено запис на наступні процедури:</b>")
+        lines.extend([f"• {html.escape(item)}" for item in approved_items])
+
+    if rejected_items:
+        lines.append("")
+        lines.append("❌ <b>На жаль, ми не можемо підтвердити запис на наступні процедури:</b>")
+        lines.extend([f"• {html.escape(item)}" for item in rejected_items])
+        lines.append(
+            "Оскільки ми працюємо з великою кількістю різного обладнання, "
+            "вибір моделей здійснюється за певними технічними принципами під конкретну методику дня."
+        )
+        lines.append("Ми будемо щиро раді розглянути вашу кандидатуру наступного разу!")
+
+    if approved_items:
+        lines.append("")
+        lines.append("Інструкції:")
+        lines.append("• Будь ласка, прийдіть за 15 хвилин до початку")
+        lines.append("• Майте при собі документ, що підтверджує особу")
+        lines.append("• У разі неможливості прийти - повідомте нас заздалегідь")
+        lines.append("")
+        lines.append("Адреса: Оболонський проспект, 28, Medicalaser")
+        lines.append("https://maps.app.goo.gl/2spzGUtcyYP38bHh8?g_st=ic")
+        lines.append("Контакти адміністратора: +380962201240 (Вікторія)")
+        lines.append("До зустрічі!")
+
+    return "\n".join(lines)
+
+
+async def maybe_send_final_review_notification(
+    context: ContextTypes.DEFAULT_TYPE,
+    application: dict,
+    event: Optional[dict]
+) -> bool:
+    """Надіслати одне підсумкове повідомлення користувачу після завершення розгляду заявок."""
+    related_applications = get_related_applications_for_review(application, event)
+    text = build_final_review_notification_text(related_applications)
+    if not text:
+        return False
+
+    try:
+        await context.bot.send_message(
+            chat_id=application['user_id'],
+            text=text,
+            reply_markup=get_user_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+
+        has_approved = any(app.get('status') in ('approved', 'primary') for app in related_applications)
+        if has_approved:
+            video_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "find.mp4")
+            if os.path.exists(video_path):
+                try:
+                    with open(video_path, "rb") as video_file:
+                        await context.bot.send_video(
+                            chat_id=application['user_id'],
+                            video=video_file,
+                            caption="На відео показано, як нас знайти! Інструкція щодо візиту вище"
+                        )
+                except Exception as video_err:
+                    logger.error(
+                        "Не вдалося надіслати відеоінструкцію у підсумковому повідомленні: user_id=%s, err=%s",
+                        application.get('user_id'),
+                        video_err
+                    )
+            else:
+                logger.warning("Відеоінструкцію не надіслано: файл find.mp4 не знайдено поруч з bot.py")
+
+        return True
+    except Exception as err:
+        logger.debug(
+            "Не вдалося надіслати підсумкове повідомлення користувачу: user_id=%s, err=%s",
+            application.get('user_id'),
+            err
+        )
+        return False
+
+
 def build_group_application_text(applications: list, candidate: dict) -> str:
     """Побудувати текст групової заявки"""
     # Екранувати всі user input для безпеки
@@ -4025,16 +4166,16 @@ def build_group_application_keyboard(applications: list, candidate: dict) -> Inl
         ]
 
         if status == 'pending':
-            row.append(InlineKeyboardButton("В резерв", callback_data=f"approve_{application_id}"))
+            row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application_id}"))
             row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application_id}"))
         elif status == 'approved':
-            row.append(InlineKeyboardButton("Обрати основним", callback_data=f"primary_{application_id}"))
+            row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application_id}"))
             row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application_id}"))
         elif status == 'primary':
-            row.append(InlineKeyboardButton("⭐", callback_data="noop"))
+            row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application_id}"))
             row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application_id}"))
         elif status in ('rejected', 'cancelled'):
-            row.append(InlineKeyboardButton("В резерв", callback_data=f"approve_{application_id}"))
+            row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application_id}"))
             row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application_id}"))
 
         rows.append(row)
@@ -4057,16 +4198,16 @@ def build_single_application_keyboard(application: dict, event: dict) -> InlineK
 
     status = application.get('status', 'pending')
     if status == 'pending':
-        row.append(InlineKeyboardButton("В резерв", callback_data=f"approve_{application['id']}"))
+        row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application['id']}"))
         row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application['id']}"))
     elif status == 'approved':
-        row.append(InlineKeyboardButton("Обрати основним", callback_data=f"primary_{application['id']}"))
+        row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application['id']}"))
         row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application['id']}"))
     elif status == 'primary':
-        row.append(InlineKeyboardButton("⭐", callback_data="noop"))
+        row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application['id']}"))
         row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application['id']}"))
     elif status in ('rejected', 'cancelled'):
-        row.append(InlineKeyboardButton("В резерв", callback_data=f"approve_{application['id']}"))
+        row.append(InlineKeyboardButton("✅ Схвалити", callback_data=f"approve_{application['id']}"))
         row.append(InlineKeyboardButton("❌", callback_data=f"reject_{application['id']}"))
 
     keyboard = [
@@ -4249,9 +4390,9 @@ def build_day_summary_text(context: ContextTypes.DEFAULT_TYPE, date: str) -> Opt
 
                 extras = []
                 if status == 'primary':
-                    extras.append("основний кандидат")
+                    extras.append("схвалено")
                 elif status == 'approved':
-                    extras.append("резерв")
+                    extras.append("схвалено")
 
                 extras_text = " ".join(html.escape(part) for part in extras) if extras else ""
 
@@ -4396,11 +4537,13 @@ async def update_day_summary(context: ContextTypes.DEFAULT_TYPE, date: str) -> N
 
 async def send_primary_instruction(context: ContextTypes.DEFAULT_TYPE, app: dict, event: dict) -> bool:
     """Надіслати кандидату інструкцію для основного учасника"""
+    safe_procedure = html.escape(str(event.get('procedure_type', '')))
+    safe_time = html.escape(str(event.get('time', '')))
     instruction = (
         f"Вітаємо! Вашу заявку схвалено!\n\n"
-        f"Процедура: {event['procedure_type']}\n"
+        f"Процедура: {safe_procedure}\n"
         f"Дата: {format_date(event['date'])}\n"
-        f"Час: {event['time']}\n\n"
+        f"Час: {safe_time}\n\n"
         "Адреса: Оболонський проспект, 28, Medicalaser\n\n"
         "https://maps.app.goo.gl/2spzGUtcyYP38bHh8?g_st=ic\n\n"
         "Контакти адміністратора: +380962201240 (Вікторія)\n\n"
@@ -4411,11 +4554,20 @@ async def send_primary_instruction(context: ContextTypes.DEFAULT_TYPE, app: dict
         "До зустрічі!"
     )
 
+    rejected_procedures = get_rejected_procedures_for_related_applications(app, event)
+    if rejected_procedures:
+        rejected_text = ", ".join(rejected_procedures)
+        instruction += (
+            "\n\n❌ <b>На жаль, ми не можемо підтвердити запис на наступні процедури:</b>\n"
+            f"{html.escape(rejected_text)}"
+        )
+
     try:
         await context.bot.send_message(
             chat_id=app['user_id'],
             text=instruction,
-            reply_markup=get_user_keyboard()
+            reply_markup=get_user_keyboard(),
+            parse_mode=ParseMode.HTML
         )
 
         video_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "find.mp4")
@@ -4881,14 +5033,22 @@ async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     application_id = int(query.data.split('_')[1])
     app = db.get_application(application_id)
+    if not app:
+        await send_admin_message_from_query(query, context, "Заявка не знайдена або вже оброблена.")
+        return
+    if app.get('status') in ('approved', 'primary'):
+        return
 
-    db.update_application_status(application_id, 'approved')
+    # "Схвалити" = погодити заявку для заходу (статус primary)
+    db.set_primary_application(application_id)
     db.recalculate_application_positions(app['event_id'])
     event = db.get_event(app['event_id'])
     if event:
+        await sync_event_filled_state(context, event['id'])
         await update_day_summary(context, event['date'])
 
     app = db.get_application(application_id)
+    await maybe_send_final_review_notification(context, app, event)
 
     # Оновлюємо групове повідомлення або одиночне
     if await refresh_group_application_message(context, application_id):
@@ -4932,6 +5092,8 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not application:
         await send_admin_message_from_query(query, context, "Заявка не знайдена або вже оброблена.")
         return
+    if application.get('status') == 'rejected':
+        return
 
     # Якщо це основний кандидат - показати попередження
     if application['status'] == 'primary':
@@ -4944,7 +5106,6 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"📞 {html.escape(application['phone'])}\n"
                 f"📅 {format_date(event['date'])}\n"
                 f"🕐 {event['time']} - {event['procedure_type']}\n\n"
-                f"Кандидату вже було відправлено повідомлення про обрання його заявки.\n\n"
                 f"Продовжити?"
             )
             keyboard = [
@@ -4978,6 +5139,8 @@ async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
     db.update_application_status(application_id, 'rejected')
     db.recalculate_application_positions(application['event_id'])
     event = db.get_event(application['event_id'])
+    await maybe_send_final_review_notification(context, application, event)
+
     if event:
         await update_day_summary(context, event['date'])
 
@@ -5013,19 +5176,16 @@ async def set_primary_application(update: Update, context: ContextTypes.DEFAULT_
         await answer_callback_query(query, "Немає доступу", show_alert=True)
         return
 
-    await answer_callback_query(query, "Встановлено основним кандидатом")
+    await answer_callback_query(query, "Заявку схвалено")
 
     application_id = int(query.data.split('_')[1])
-    result = await promote_candidate_to_primary(context, application_id)
+    result = await promote_candidate_to_primary(context, application_id, notify_user=False)
 
     if not result:
         await send_admin_message_from_query(query, context, "Не вдалося оновити заявку")
         return
 
-    if result['instruction_sent']:
-        await send_admin_message_from_query(query, context, "Інструкцію надіслано кандидату")
-    else:
-        await send_admin_message_from_query(query, context, "Не вдалося надіслати інструкцію кандидату")
+    await maybe_send_final_review_notification(context, result['app'], result['event'])
 
     if not result['group_updated']:
         # Якщо це не групова заявка, оновлюємо одиночну заявку
@@ -5065,23 +5225,7 @@ async def confirm_reject_primary(update: Update, context: ContextTypes.DEFAULT_T
         await update_day_summary(context, event['date'])
         await sync_event_filled_state(context, event['id'])
 
-    # Відправляємо повідомлення кандидату про відхилення
-    if event:
-        rejection_text = (
-            "Вибачте, але вашу раніше підтверджену заявку було відхилено. "
-            "Просимо вибачення за незручності.\n\n"
-            f"Процедура: {event['procedure_type']}\n"
-            f"Дата: {format_date(event['date'])}\n"
-            f"Час: {event['time']}"
-        )
-        try:
-            await context.bot.send_message(
-                chat_id=application['user_id'],
-                text=rejection_text,
-                reply_markup=get_user_keyboard()
-            )
-        except Exception as err:
-            logger.debug(f"Не вдалося повідомити кандидата про відхилення: {err}")
+    await maybe_send_final_review_notification(context, application, event)
 
     # Повідомляємо адміністратора про успішне відхилення
     await send_admin_message_from_query(
