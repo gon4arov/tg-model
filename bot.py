@@ -4232,7 +4232,7 @@ def format_day_count_text(count: int) -> str:
     if count <= 0:
         return ""
     if count == 1:
-        return " (1 заявка від цього кандидата на цей день)"
+        return ""
     if 2 <= count <= 4:
         return f" ({count} заявки від цього кандидата на цей день)"
     return f" ({count} заявок від цього кандидата на цей день)"
